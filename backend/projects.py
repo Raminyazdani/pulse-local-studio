@@ -125,6 +125,32 @@ def _beat_config(value) -> None:
         raise ValueError("Beat pattern must be a string or an array of 0/1 entries.")
 
 
+def _source_spans(value, media: dict, track_kind: str, label: str = "Clip") -> float:
+    segments = _array(value, f"{label} segments")
+    if not segments:
+        raise ValueError(f"{label} needs at least one source segment.")
+    duration = 0.
+    for entry in segments:
+        segment = _object(entry, f"{label} source segment")
+        media_id = checked_id(segment.get("mediaId"))
+        if media_id not in media:
+            raise ValueError(f"{label} references missing media.")
+        asset = media[media_id]
+        if (track_kind == "audio") != (asset["kind"] == "audio"):
+            raise ValueError(f"{label} is on an incompatible track.")
+        source_in = _number(segment.get("in"), f"{label} source in")
+        source_out = _number(segment.get("out"), f"{label} source out")
+        if source_out <= source_in or (asset["kind"] != "image" and source_out > asset["duration"] + TOLERANCE):
+            raise ValueError(f"{label} has an invalid source range.")
+        speed = _number(segment.get("speed", 1), f"{label} source speed", positive=True)
+        duration += (source_out - source_in) / speed
+        _number(segment.get("volume", 1), f"{label} source volume")
+        _flag(segment, "muted", f"{label} source mute")
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError(f"{label} has an invalid source duration.")
+    return duration
+
+
 def validate_project(value, expected_id: str | None = None) -> dict:
     """Validate the edit graph without requiring media to be mounted or decoded.
 
@@ -193,28 +219,7 @@ def validate_project(value, expected_id: str | None = None) -> dict:
         if track_id not in tracks:
             raise ValueError("A clip references a missing track.")
         start = _number(clip.get("start"), "Clip start")
-        segments = _array(clip.get("segments"), "Clip segments")
-        if not segments:
-            raise ValueError("A clip needs at least one source segment.")
-        duration = 0.
-        for entry in segments:
-            segment = _object(entry, "Source segment")
-            media_id = checked_id(segment.get("mediaId"))
-            if media_id not in media:
-                raise ValueError("A clip references missing media.")
-            asset = media[media_id]
-            if (tracks[track_id]["kind"] == "audio") != (asset["kind"] == "audio"):
-                raise ValueError("A clip is on an incompatible track.")
-            source_in = _number(segment.get("in"), "Source in")
-            source_out = _number(segment.get("out"), "Source out")
-            if source_out <= source_in or (asset["kind"] != "image" and source_out > asset["duration"] + TOLERANCE):
-                raise ValueError("A clip has an invalid source range.")
-            speed = _number(segment.get("speed", 1), "Source speed", positive=True)
-            duration += (source_out - source_in) / speed
-            _number(segment.get("volume", 1), "Source volume")
-            _flag(segment, "muted", "Source mute")
-        if not math.isfinite(duration) or duration <= 0:
-            raise ValueError("A clip has an invalid source duration.")
+        duration = _source_spans(clip.get("segments"), media, tracks[track_id]["kind"])
         _number(clip.get("volume", 1), "Clip volume")
         _flag(clip, "muted", "Clip mute")
         _times(clip.get("signals"), "Video signals", duration)
@@ -244,6 +249,24 @@ def validate_project(value, expected_id: str | None = None) -> dict:
                 output_duration = previous[1]
         if not math.isfinite(start + output_duration) or start + output_duration > 86400:
             raise ValueError("Project duration cannot exceed 24 hours.")
+        if ("editSource" in clip) != ("sourceWindow" in clip):
+            raise ValueError("Retained source and source window must be saved together.")
+        if "editSource" in clip:
+            retained = _object(clip["editSource"], "Retained source")
+            if "warp" in retained:
+                raise ValueError("Retained source must use flattened spans.")
+            full_duration = _source_spans(retained.get("segments"), media, tracks[track_id]["kind"], "Retained source")
+            if full_duration > 86400:
+                raise ValueError("Retained source cannot exceed 24 hours.")
+            _times(retained.get("signals"), "Retained signals", full_duration)
+            if "beatEdits" in retained:
+                _times(retained["beatEdits"], "Retained manual beats", full_duration)
+            window = _object(clip["sourceWindow"], "Source window")
+            source_in = _number(window.get("in"), "Source window in")
+            source_out = _number(window.get("out"), "Source window out")
+            if (source_out <= source_in or source_in >= full_duration or source_out > full_duration + TOLERANCE or
+                    abs(source_out - source_in - output_duration) > TOLERANCE):
+                raise ValueError("Source window must match the visible output range inside the retained source.")
     # JSON roundtrip prevents caller mutation after validation and keeps unknown
     # source color/preview metadata intact rather than dropping new fields.
     return json.loads(json.dumps(data, ensure_ascii=False, allow_nan=False))

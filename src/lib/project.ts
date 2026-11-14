@@ -182,6 +182,24 @@ export function parseProject(input: unknown): Project {
       fail(`clip ${id} extends past the supported 24-hour project length.`)
     }
     if (clip.beatEdits !== undefined) parsed.beatEdits = times(clip.beatEdits, `clip ${id} edited beats`, duration)
+    if ((clip.editSource === undefined) !== (clip.sourceWindow === undefined)) fail(`clip ${id} retained source and window must be saved together.`)
+    if (clip.editSource !== undefined) {
+      const retained = object(clip.editSource, `clip ${id} retained source`)
+      if (retained.warp !== undefined) fail(`clip ${id} retained source must use flattened source spans.`)
+      const fullSegments = array(retained.segments, `clip ${id} retained spans`).map(segment => parseSegment(segment, id, media, track))
+      if (!fullSegments.length) fail(`clip ${id} retained source has no spans.`)
+      const fullDuration = sourceDuration({ segments: fullSegments })
+      if (!Number.isFinite(fullDuration) || fullDuration > 86400) fail(`clip ${id} retained source exceeds 24 hours.`)
+      const range = object(clip.sourceWindow, `clip ${id} source window`)
+      const sourceIn = number(range.in, `clip ${id} source window in`)
+      const sourceOut = number(range.out, `clip ${id} source window out`)
+      if (sourceOut <= sourceIn || sourceIn >= fullDuration || sourceOut > fullDuration + TOLERANCE || Math.abs(sourceOut - sourceIn - outputDuration) > TOLERANCE) {
+        fail(`clip ${id} source window does not match the visible output range.`)
+      }
+      parsed.editSource = { segments: fullSegments, signals: times(retained.signals, `clip ${id} retained signals`, fullDuration) }
+      if (retained.beatEdits !== undefined) parsed.editSource.beatEdits = times(retained.beatEdits, `clip ${id} retained beats`, fullDuration)
+      parsed.sourceWindow = { in: sourceIn, out: Math.min(sourceOut, fullDuration) }
+    }
     return parsed
   })
   uniqueIds(clips, 'Clips')

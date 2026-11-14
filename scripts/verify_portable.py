@@ -7,6 +7,7 @@ under a unique test directory; the packaged user library is inspected read-only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -280,12 +281,12 @@ def run(args) -> dict:
         # Verified absolute paths above; rename stays inside this test workspace.
         # Windows may briefly retain an image/scanner handle after process exit.
         # Retry the same rename without copying/deleting any application data.
-        for attempt in range(30):
+        for attempt in range(100):
             try:
                 app.rename(moved)
                 break
             except PermissionError:
-                if attempt == 29:
+                if attempt == 99:
                     raise
                 time.sleep(.2)
         app = moved
@@ -333,6 +334,15 @@ def run(args) -> dict:
                                     timeout=150, creationflags=CREATE_FLAGS)
             assert result.returncode == 0, "Portable browser checks failed."
             report["checks"].append("browser loads disk project, plays warped MOVs and autosaves to disk")
+            editing_env = dict(browser_env, PULSE_EDIT_TEST="1",
+                               PULSE_EDIT_WORKSPACE_KEY=hashlib.sha256(
+                                   str((app / "data").resolve()).casefold().encode("utf-8")
+                               ).hexdigest()[:24])
+            result = subprocess.run([node, str(ROOT / "node_modules" / "@playwright" / "test" / "cli.js"),
+                                     "test", "tests/editing.spec.ts"], cwd=ROOT, env=editing_env,
+                                    timeout=600, creationflags=CREATE_FLAGS)
+            assert result.returncode == 0, "Precision editing browser checks failed."
+            report["checks"].append("browser reversible trim, stable waveform, source slip, frame preview and retained retime recovery")
         report["passed"] = True
         return report
     finally:

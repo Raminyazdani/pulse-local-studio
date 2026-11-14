@@ -1,1 +1,31 @@
-.pulse-update-dialog{width:455px}.pulse-update-dialog>h2{font-size:25px;letter-spacing:-.8px;margin-top:11px}.pulse-update-dialog>p{margin-bottom:20px}.pulse-update-status{display:flex;align-items:flex-start;gap:12px;padding:15px 12px;background:#293923;border:1px solid #465d37;border-radius:7px;color:#bad5a7}.pulse-update-status-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:#374d2a;color:#cae8b5;flex-shrink:0}.pulse-update-status>div{display:flex;flex-direction:column;gap:7px;padding-top:2px}.pulse-update-status strong{font-size:12px;font-weight:500;color:#d1e6c0;line-height:1.4}.pulse-update-status>div>span{font-size:10px;line-height:1.7;color:#98b487}.pulse-update-status.error{background:#372c23;border-color:#76573c}.pulse-update-status.error .pulse-update-status-icon{background:#4b3828;color:#e5b68d}.pulse-update-status.error strong{color:#e7c7a7}.pulse-update-status.error>div>span{color:#b69b80}.pulse-update-status.success{border-color:#607d47}.pulse-update-versions{display:flex;align-items:center;justify-content:center;gap:35px;padding:20px 10px;margin:18px 0 0;border-top:1px solid #3d4e32;border-bottom:1px solid #3d4e32;color:#688750}.pulse-update-versions>div{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:95px}.pulse-update-versions>div>span{font-size:8px;letter-spacing:1.4px;color:#8fa77c}.pulse-update-versions strong{font-family:var(--mono);font-size:16px;font-weight:400;color:#d2e5c0;max-width:140px;overflow-wrap:anywhere;text-align:center}.pulse-update-progress{margin:20px 0 0}.pulse-update-progress>div{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:10px;color:#b4cea0}.pulse-update-progress strong{font-family:var(--mono);font-weight:400;font-size:10px}.pulse-update-progress>progress{display:block;width:100%;height:5px;margin-top:12px;accent-color:var(--green)}.pulse-update-dialog>.pulse-update-error{font-size:10px;line-height:1.8;color:#e5b78e;padding:11px 12px;border-radius:5px;background:#3b2d22;border:1px solid #695039;overflow-wrap:anywhere;margin:17px 0 0}.pulse-update-notes{margin-top:19px;color:#b6cda3;font-size:11px}.pulse-update-notes>summary{cursor:pointer;user-select:none}.pulse-update-notes>pre{margin:10px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;max-height:150px;overflow:auto;border-radius:5px;background:#182113;border:1px solid #34482b;padding:12px;font-family:inherit;font-size:10px;line-height:1.85;color:#9ab286}.pulse-update-folder{display:flex;align-items:flex-start;gap:11px;margin:20px 0 19px;padding:13px 11px;background:#24311d;border:1px solid #3c5130;border-radius:6px;color:#92b079}.pulse-update-folder>p{font-size:10px;line-height:1.8;color:#a1b98e}.pulse-update-release{display:flex;justify-content:center;align-items:center;gap:7px;color:#94ad81;font-size:10px;margin:17px auto 0;max-width:100%}.pulse-update-release:hover{color:#d0e8bc}.pulse-update-dialog>.button.primary{margin-top:0}.pulse-update-dialog>.button.outline{margin-top:0}
+.pulse-update-dialog { width: 465px; }
+.pulse-update-dialog > h2 { margin-top: 11px; font-size: 25px; letter-spacing: -.8px; }
+.pulse-update-dialog > p { margin-bottom: 20px; }
+.pulse-update-status { display: flex; align-items: flex-start; gap: 12px; border: 1px solid #425c87; border-radius: 8px; padding: 15px 12px; background: #243650; color: #bad0f5; }
+.pulse-update-status-icon { display: grid; place-items: center; flex-shrink: 0; width: 35px; height: 35px; border-radius: 8px; background: #344f76; color: #d0e2ff; }
+.pulse-update-status > div { display: flex; flex-direction: column; gap: 7px; padding-top: 2px; }
+.pulse-update-status strong { color: #dce8ff; font-size: 13px; font-weight: 500; line-height: 1.4; }
+.pulse-update-status > div > span { color: #b0c3e1; font-size: 11px; line-height: 1.7; }
+.pulse-update-status.error { border-color: #805357; background: #3b2c34; }
+.pulse-update-status.error .pulse-update-status-icon { background: #553a43; color: #f1b6bc; }
+.pulse-update-status.error strong { color: #f9d4d8; }
+.pulse-update-status.error > div > span { color: #d1a9b0; }
+.pulse-update-status.success { border-color: #4d7767; }
+.pulse-update-status.success .pulse-update-status-icon { color: var(--success); }
+.pulse-update-versions { display: flex; align-items: center; justify-content: center; gap: 35px; margin: 18px 0 0; border-top: 1px solid #3b4b67; border-bottom: 1px solid #3b4b67; padding: 20px 10px; color: #829dc9; }
+.pulse-update-versions > div { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 95px; }
+.pulse-update-versions > div > span { color: #a3b7d7; font-size: 10px; letter-spacing: 1.2px; }
+.pulse-update-versions strong { max-width: 140px; color: #dce8ff; font-family: var(--mono); font-size: 17px; font-weight: 400; text-align: center; overflow-wrap: anywhere; }
+.pulse-update-progress { margin: 20px 0 0; }
+.pulse-update-progress > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #bed1f0; font-size: 11px; }
+.pulse-update-progress strong { font-family: var(--mono); font-size: 11px; font-weight: 400; }
+.pulse-update-progress > progress { display: block; width: 100%; height: 6px; margin-top: 12px; accent-color: var(--accent); }
+.pulse-update-dialog > .pulse-update-error { margin: 17px 0 0; border: 1px solid #7a4d54; border-radius: 6px; padding: 12px; background: #432c35; color: #f4bbc4; font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.pulse-update-notes { margin-top: 19px; color: #bfd1ef; font-size: 12px; }
+.pulse-update-notes > summary { cursor: pointer; user-select: none; }
+.pulse-update-notes > pre { max-height: 150px; overflow: auto; margin: 10px 0 0; border: 1px solid #354b70; border-radius: 6px; padding: 12px; background: #152137; color: #aac1e4; font-family: inherit; font-size: 11px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pulse-update-folder { display: flex; align-items: flex-start; gap: 11px; margin: 20px 0 19px; border: 1px solid #3a516f; border-radius: 7px; padding: 13px 11px; background: #233249; color: #a9c1e6; }
+.pulse-update-folder > p { color: #b7c9e3; font-size: 11px; line-height: 1.8; }
+.pulse-update-release { display: flex; align-items: center; justify-content: center; gap: 7px; max-width: 100%; margin: 17px auto 0; color: #aec6ec; font-size: 11px; }
+.pulse-update-release:hover { color: #dbe8ff; }
+.pulse-update-dialog > .button.primary, .pulse-update-dialog > .button.outline { margin-top: 0; }

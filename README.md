@@ -28,6 +28,16 @@ Keep `_internal`, `bin`, `dist` and `data` together. Running the EXE inside the 
 - Projects saved inside the app folder, a project picker, JSON backups and Undo/Redo.
 - User-requested GitHub release checks and in-app installation of newer portable versions.
 
+## More precise editing in 1.3
+
+Trimming retains the available source. Drag either clip edge inward to shorten it, then outward to recover material. The waveform follows the actual source position and scale while you move, trim or slip a clip; it does not stretch to fill the container. Larger handles, a source outline and live in/out feedback make the selected range easier to see.
+
+Select a clip and open **Clip → Source selection** for a full-source overview, numeric **Source selection in/out** fields, one-frame slip buttons and **Restore full source**. Drag the selected window, hold **Alt** while dragging a timeline clip, or press **Y** for the slip tool to choose another part of the source while keeping the clip's timeline position and duration. Hold **Shift** during a drag to bypass snapping; use **Ctrl + mouse wheel** over the timeline to zoom around the pointer.
+
+The interface uses charcoal panels with blue selection controls, cyan audio, lilac video, amber music beats and pink video signals. Save status remains visible in compact desktop layouts. See the [1.3 usability audit and follow-up suggestions](docs/ui-audit-1.3.md).
+
+Older projects remain readable. A single-asset trim can recover its available original media. A sequence already merged and destructively shortened by v1.2 cannot recover composition sections that were never saved in that project; recreate those sections from the original clips or restore an earlier project backup. New source-selection metadata preserves the available sequence for later edits. All media and project data stay local.
+
 ## From music to a finished edit
 
 1. **Import** music, footage and images. Use a file's `+` button or drag it onto a compatible track.
@@ -82,7 +92,10 @@ Checks happen when requested. If you are offline or GitHub is unavailable, conti
 | Key | Action |
 |---|---|
 | Space | Play / pause |
-| V / B | Select / beat-marker tool |
+| V / B / Y | Select / beat-marker / slip-source tool |
+| Alt + drag clip | Slip source inside a fixed timeline clip |
+| Shift during drag | Bypass snapping |
+| Ctrl + mouse wheel | Zoom timeline around pointer |
 | S | Split selected clip at playhead |
 | M | Add a video signal at playhead |
 | Delete | Remove selected clips |

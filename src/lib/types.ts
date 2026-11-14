@@ -34,6 +34,19 @@ export interface WarpPoint {
   target: number
 }
 
+/** Retained, flattened source composition. This is edit metadata, never another encode. */
+export interface ClipEditSource {
+  segments: Segment[]
+  signals: number[]
+  beatEdits?: number[]
+}
+
+export interface SourceWindow {
+  /** Seconds on the retained composition's output clock, before cropping. */
+  in: number
+  out: number
+}
+
 export interface Clip {
   id: string
   name: string
@@ -49,6 +62,9 @@ export interface Clip {
   beatConfig?: BeatSelection
   /** Optional manually edited detected beats, before the sampling pattern is applied. */
   beatEdits?: number[]
+  /** Full composition retained when its visible range is trimmed or slipped. */
+  editSource?: ClipEditSource
+  sourceWindow?: SourceWindow
 }
 
 export interface Track {

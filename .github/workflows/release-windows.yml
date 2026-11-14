@@ -80,7 +80,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed.' }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
-          python -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_updates -v
+          python -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_updates -v
           if ($LASTEXITCODE -ne 0) { throw 'Backend tests failed.' }
 
       - name: Build the application-only portable package

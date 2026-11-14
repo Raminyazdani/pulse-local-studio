@@ -78,6 +78,7 @@ async function openFreshProject(page: Page) {
   // scenario creates its own graph instead of changing the prior project.
   await page.getByLabel('Saved projects', { exact: true }).click();
   await page.getByRole('button', { name: 'New project', exact: true }).click();
+  await expect(page.locator('.studio')).toHaveAttribute('aria-busy', 'false');
   await expect(page.locator('.saved-label')).toHaveText('Saved to folder');
 }
 
@@ -98,6 +99,7 @@ test('imports, edits and exports a beat-synced compound video using original med
   await expect(page.locator('.timeline-clip.audio')).toHaveCount(1);
 
   await page.locator('.timeline-clip.audio').click();
+  await page.locator('.inspector-tabs').getByRole('button', { name: 'Beats', exact: true }).click();
   const analyzed = page.waitForResponse(response => response.url().includes('/api/analyze/') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Detect beats', exact: true }).click();
   const detection = await (await analyzed).json() as { beats: number[]; bpm: number };
