@@ -105,16 +105,19 @@ def update_status() -> dict:
         try:
             receipt = json.loads(receipt_path.read_text("utf-8"))
             key = (receipt.get("transactionId"), receipt.get("status"), receipt.get("timestamp"))
-            if key != LAST_RECEIPT and STATE.get("status") not in {"checking", "downloading", "ready", "installing"}:
+            if key != LAST_RECEIPT:
                 LAST_RECEIPT = key
-                if receipt.get("status") == "complete" and receipt.get("version") == VERSION:
-                    STATE.update(status="up-to-date", progress=1, message=receipt.get("message"), latestVersion=VERSION)
-                elif receipt.get("status") in {"error", "rolled-back"}:
-                    STATE.update(status="error", progress=0, error=receipt.get("message"), message=receipt.get("message"))
+                # Historical results are startup context only. Never replace a
+                # fresh check/download result with an older completion receipt.
+                history_only = STATE.get("status") == "idle" or STATE.get("_fromReceipt") is True
+                if history_only and receipt.get("status") == "complete" and receipt.get("version") == VERSION:
+                    STATE.update(status="up-to-date", progress=1, message=receipt.get("message"), latestVersion=VERSION, _fromReceipt=True)
+                elif history_only and receipt.get("status") in {"error", "rolled-back"}:
+                    STATE.update(status="error", progress=0, error=receipt.get("message"), message=receipt.get("message"), _fromReceipt=True)
         except (OSError, ValueError):
             pass
         result = {"currentVersion": VERSION, "repository": GITHUB_REPOSITORY,
-                  "portable": portable, **copy.deepcopy(STATE)}
+                  "portable": portable, **copy.deepcopy({key: value for key, value in STATE.items() if not key.startswith("_")})}
         if not portable and result["status"] == "idle":
             result.update(status="unsupported", message="Automatic installation is available in the portable Windows app.")
         return result
@@ -133,12 +136,14 @@ def _error(exc: Exception) -> None:
         elif exc.code in {403, 429}:
             message = "GitHub temporarily limited update checks. Try again later."
     with LOCK:
-        STATE.update(status="error", progress=0, error=message, message=message)
+        STATE.update(status="error", progress=0, error=message, message=message, _fromReceipt=False)
 
 
 def _check() -> None:
     global MANIFEST
     try:
+        with LOCK:
+            STATE["_fromReceipt"] = False
         repository = configured_repository()
         release = fetch_json(f"https://api.github.com/repos/{repository}/releases/latest", repository, api=True)
         if release.get("draft") or release.get("prerelease"):

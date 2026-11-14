@@ -117,6 +117,15 @@ def prepare(args) -> Path:
 
 
 def stop_test_app(app: Path, base: str, expected_key: str, original: subprocess.Popen | None) -> None:
+    # A failed browser assertion can land between the old process exiting and
+    # the helper launching its replacement. Let an already-started transaction
+    # settle before cleanup, so its later restart cannot leave an orphan server.
+    plans = list((app / "data" / "updates").glob("*/plan.json"))
+    settle = time.monotonic() + 180
+    while any(not plan.with_name("result.json").is_file() for plan in plans):
+        if time.monotonic() >= settle:
+            raise AssertionError("The isolated update helper did not settle during cleanup; inspect its local updater.log.")
+        time.sleep(.3)
     try:
         health = request(base, "/api/health")
     except (OSError, ValueError):
@@ -211,6 +220,12 @@ def run_live(prepared_path: Path) -> dict:
                                   "completion receipt records old and new versions"])
         report.update(passed=True, browser=browser_result, receipt=receipt)
         return report
+    except BaseException as error:
+        report.update(passed=False, error=f"{type(error).__name__}: {error}")
+        receipt_file = data / "updates" / "last-result.json"
+        if receipt_file.is_file():
+            report["receipt"] = read_json(receipt_file)
+        raise
     finally:
         try:
             stop_test_app(app, base, expected_key, original)

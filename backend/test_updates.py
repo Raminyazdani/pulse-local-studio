@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 import stat
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock, patch
 import uuid
 import zipfile
@@ -128,7 +130,7 @@ class UpdateTests(unittest.TestCase):
 
         def fail_one_new_unit(source, destination):
             nonlocal failed
-            if source == stage / "new" / "bin" and not failed:
+            if source.name.casefold() == "bin" and source.parent.name.casefold() == "new" and not failed:
                 failed = True
                 raise OSError("simulated locked runtime")
             return real_move(source, destination)
@@ -136,6 +138,7 @@ class UpdateTests(unittest.TestCase):
         with patch.object(helper, "move_path", side_effect=fail_one_new_unit), patch.object(helper, "launch_app", return_value=FakeProcess()), patch.object(helper, "wait_ready", return_value=True):
             result = helper.apply_plan(stage / "plan.json", wait_parent=False)
         self.assertEqual(result["status"], "rolled-back")
+        self.assertTrue(failed, "The filesystem failure injection did not reach the runtime replacement.")
         for name, old in self.units.items():
             self.assertEqual((self.root / name).read_bytes(), old)
         self.assert_private_data_preserved()
@@ -231,6 +234,23 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(updates.STATE["status"], "up-to-date")
         self.assertEqual(fetch.call_count, 1)
         self.assertIsNone(updates.MANIFEST)
+
+    def test_historical_completion_receipt_never_hides_a_new_available_release(self):
+        _, archive, _ = self.package()
+        manifest = self.manifest(archive)
+        helper.write_json(self.data / "updates/last-result.json", {"transactionId": "old-install", "status": "complete",
+            "version": updates.VERSION, "timestamp": 1, "message": "Previous update finished"})
+        release = {"tag_name": "v" + self.next_version, "assets": [
+            {"name": "pulse-update.json", "browser_download_url": f"https://github.com/{self.repository}/releases/download/v{self.next_version}/pulse-update.json"},
+            {"name": manifest["asset"]["name"], "browser_download_url": manifest["asset"]["url"],
+             "size": manifest["asset"]["size"], "digest": "sha256:" + manifest["asset"]["sha256"]}]}
+        updates.STATE.update(status="checking")
+        # Simulate a click before the first status GET on a freshly restarted app.
+        with patch.object(updates, "fetch_json", side_effect=[release, manifest]):
+            updates._check()
+        status = updates.update_status()
+        self.assertEqual(status["status"], "available")
+        self.assertEqual(status["latestVersion"], self.next_version)
 
     def test_download_verifies_package_before_helper_launch_and_shutdown(self):
         _, archive, _ = self.package()
@@ -355,6 +375,74 @@ class UpdateTests(unittest.TestCase):
             self.assertEqual(client.post("/api/media", files={"files": ("test.mov", b"fixture")}).status_code, 409)
             self.assertEqual(client.post("/api/analyze/fixture", json={}).status_code, 409)
             self.assertEqual(client.post("/api/export", json={}).status_code, 409)
+            upload.assert_not_called()
+        self.assertEqual(server.app.state.active_media_operations, 0)
+
+    def test_concurrent_install_claim_blocks_upload_admission_until_updating_is_visible(self):
+        import importlib
+        from fastapi.testclient import TestClient
+        server = importlib.import_module("backend.app")
+        install_claiming = threading.Event()
+        allow_claim = threading.Event()
+        upload_reached_gate = threading.Event()
+        installing = threading.Event()
+        owner = {"thread": None}
+
+        class ObservedAdmissionLock:
+            """Observe entry attempts while keeping real cross-thread exclusion."""
+            def __init__(self):
+                self.lock = threading.RLock()
+
+            def __enter__(self):
+                if install_claiming.is_set() and threading.get_ident() != owner["thread"]:
+                    upload_reached_gate.set()
+                self.lock.acquire()
+                return self
+
+            def __exit__(self, *args):
+                self.lock.release()
+
+        admission = ObservedAdmissionLock()
+
+        def claim_update(stop, port):
+            owner["thread"] = threading.get_ident()
+            install_claiming.set()
+            if not allow_claim.wait(5):
+                raise RuntimeError("Test did not release the updater admission barrier.")
+            installing.set()
+            return {"status": "downloading"}
+
+        def request_install():
+            with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+                return client.post("/api/updates/install", json={})
+
+        def request_upload():
+            with TestClient(server.app, base_url="http://127.0.0.1:8765") as client:
+                return client.post("/api/media", files={"files": ("test.mov", b"synthetic")})
+
+        with patch.object(server, "MEDIA_UPDATE_ADMISSION", admission), patch.object(server, "JOBS", {}), \
+             patch.object(server, "start_install", side_effect=claim_update), \
+             patch.object(server, "is_installing", side_effect=installing.is_set), \
+             patch.object(server, "store_upload") as upload, \
+             patch.object(server.app.state, "stop_runtime", Mock(), create=True):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                install_future = executor.submit(request_install)
+                try:
+                    self.assertTrue(install_claiming.wait(5), "Installer did not enter its claim barrier.")
+                    upload_future = executor.submit(request_upload)
+                    self.assertTrue(upload_reached_gate.wait(5), "Concurrent upload did not reach the shared admission gate.")
+                    # Exactly at the old check-to-claim race, the installer owns
+                    # the gate and the upload has reached it but cannot pass.
+                    acquired = admission.lock.acquire(blocking=False)
+                    if acquired:
+                        admission.lock.release()
+                    self.assertFalse(acquired, "Install eligibility and claiming were not one atomic admission operation.")
+                    self.assertEqual(server.app.state.active_media_operations, 0)
+                    upload.assert_not_called()
+                finally:
+                    allow_claim.set()
+                self.assertEqual(install_future.result(timeout=5).status_code, 200)
+                self.assertEqual(upload_future.result(timeout=5).status_code, 409)
             upload.assert_not_called()
         self.assertEqual(server.app.state.active_media_operations, 0)
 

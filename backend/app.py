@@ -6,6 +6,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 
@@ -25,6 +26,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
                                                "http://localhost:8765", "http://127.0.0.1:8765"],
                    allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
 app.state.active_media_operations = 0
+MEDIA_UPDATE_ADMISSION = threading.RLock()
 
 
 @app.middleware("http")
@@ -33,13 +35,15 @@ async def protect_update_operations(request: Request, call_next):
     media_operation = request.method == "POST" and (path in {"/api/media", "/api/export"} or path.startswith("/api/analyze/"))
     if not media_operation:
         return await call_next(request)
-    if is_installing():
-        return JSONResponse({"detail": "Pulse is updating. Wait for the update to finish."}, status_code=409)
-    app.state.active_media_operations += 1
+    with MEDIA_UPDATE_ADMISSION:
+        if is_installing():
+            return JSONResponse({"detail": "Pulse is updating. Wait for the update to finish."}, status_code=409)
+        app.state.active_media_operations += 1
     try:
         return await call_next(request)
     finally:
-        app.state.active_media_operations -= 1
+        with MEDIA_UPDATE_ADMISSION:
+            app.state.active_media_operations -= 1
 
 
 def require_local_update_request(request: Request) -> None:
@@ -72,15 +76,18 @@ def check_updates(request: Request):
 @app.post("/api/updates/install")
 def install_update(request: Request):
     require_local_update_request(request)
-    if app.state.active_media_operations or any(job.get("status") in {"queued", "rendering"} for job in JOBS.values()):
-        raise HTTPException(409, "Wait for imports, audio analysis and film exports to finish before updating.")
-    stop = getattr(app.state, "stop_runtime", None)
-    if not stop:
-        raise HTTPException(409, "Run the portable edition to install an update.")
-    try:
-        return start_install(stop, getattr(app.state, "runtime_port", request.url.port or 8765))
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(409, str(exc))
+    # Checking idle state and claiming the updater must be one admission
+    # operation: a second browser may submit an import at the same moment.
+    with MEDIA_UPDATE_ADMISSION:
+        if app.state.active_media_operations or any(job.get("status") in {"queued", "rendering"} for job in JOBS.values()):
+            raise HTTPException(409, "Wait for imports, audio analysis and film exports to finish before updating.")
+        stop = getattr(app.state, "stop_runtime", None)
+        if not stop:
+            raise HTTPException(409, "Run the portable edition to install an update.")
+        try:
+            return start_install(stop, getattr(app.state, "runtime_port", request.url.port or 8765))
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(409, str(exc))
 
 
 class AnalysisRequest(BaseModel):
