@@ -1,6 +1,6 @@
 # Pulse 1.3 editing and interface audit
 
-This audit focuses on the editing problems reported against 1.2: recovering a trim, choosing another moment inside a fixed clip, reading the waveform accurately, and making a minimal desktop editor easier to use. The behavior below describes the 1.3 implementation scope; this document does not certify an unreleased portable build.
+This audit focuses on the editing problems reported against 1.2: recovering a trim, choosing another moment inside a fixed clip, reading the waveform accurately, and making a minimal desktop editor easier to use. The implementation shipped as [v1.3.0](https://github.com/Raminyazdani/pulse-local-studio/releases/tag/v1.3.0).
 
 ## Findings and changes
 
@@ -31,6 +31,15 @@ No part of this editing work uploads footage, music or project JSON. Public sour
 The interface was checked with synthetic image/audio assets in isolated browser contexts at **1280×720**, **1366×768**, **1600×1000** and **1024×768**. Preview transport, timeline status and save status remained inside the viewport without horizontal page overflow. Muted text on the main surface has approximately **6.85:1** contrast. The stylesheet and frontend build were checked after the palette change.
 
 Release validation should also cover inward/outward trims on each edge, source limits, fixed-duration slips, split and merged clips, beat/signal positions after source edits, piecewise speed maps, Undo/Redo, save/reopen and actual exported media. Visual checks alone cannot establish frame-accurate rendering or portable-update reliability; those require the engine and package checks described in [development](development.md) and [updates](updates.md).
+
+### Release validation — 15 November 2026
+
+- **60 frontend tests and 44 backend tests passed**, including retained ranges, merged/retimed source restoration, validation and real source-only rendering.
+- **Six source-browser scenarios passed**: four precision editing regressions plus original-media sync/export/playback and hidden-video audio handling. Numeric cancellation, frame nudges, live preview pixels, waveform peak position, save/reopen, Undo/Redo, manual-beat reset and concurrent detection edits are covered.
+- The [Windows release workflow](https://github.com/Raminyazdani/pulse-local-studio/actions/runs/43654289755) passed the frozen app checks with no external Python, Node or FFmpeg on the application's PATH. It verified concurrent launch, MOV import, beat detection, piecewise export, mute, Unicode folder relocation, disk persistence and five browser scenarios.
+- A separate local full-folder copy to a new Unicode path also passed playback, disk autosave, actual FFmpeg rendering and the four precision editing scenarios. Direct rename of two local disposable test folders was denied by this host despite normal ACLs and no remaining Pulse process; its cause was not established. The clean Windows CI rename passed.
+- All **205 permanent local media/project/export files** matched their copied private portable counterparts byte for byte; the library retained all **39 media items**. Public repository/history path scans and release ZIP checks found no personal data. The published ZIP's SHA-256 is `02e22ff791606c0ecfa3980366b1a0559619339e6d36f4f868c071ee769e989b`.
+- A real stock **1.2.0 → 1.3.0** GitHub update passed through **Update now**, checksum verification, standalone helper replacement, automatic restart and browser reload with the same saved project, three video signals and six selected music beats. All synthetic media and existing exports remained byte-identical, and an unrelated root file stayed intact. The first attempt encountered a transient Windows denial when moving `_internal`; rollback safely restored 1.2.0. The later full UI retry succeeded without source or installer changes. The lock's exact cause was not established; a bounded native-module probe ruled out the helper retaining DLLs from the old runtime.
 
 ## Suggested next steps
 

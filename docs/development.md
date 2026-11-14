@@ -73,7 +73,7 @@ This test builds an isolated source copy with an older runtime version. It never
 changes the source version or the personal library. It downloads the public
 release through the real application, observes replacement and restart, and
 checks that the edit graph, media, existing exports and unrelated root file
-survive. A real 1.1.9 → 1.2.0 update has passed this flow with a Windows-only PATH.
+survive. Both a real 1.1.9 → 1.2.0 update and a stock published 1.2.0 → 1.3.0 update have passed with a Windows-only PATH. The latter also exercised safe rollback after a transient local directory lock before a successful full UI retry; see the [1.3 audit](ui-audit-1.3.md).
 
 | Path | Responsibility |
 |---|---|
