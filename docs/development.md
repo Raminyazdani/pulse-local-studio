@@ -57,6 +57,22 @@ Keep the release tag synchronized with `backend/version.py`. See [release instru
 
 ## Structure
 
+To exercise an actual published GitHub update, first run the portable verifier
+above to generate its isolated synthetic media and project. Then prepare an
+older frozen fixture and run its real update UI:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/verify_live_update.py --prepare-only --old-version 1.1.9
+# Use the prepared.json path printed by preparation, after the target release exists:
+.\.venv\Scripts\python.exe scripts/verify_live_update.py --prepared <prepared.json>
+```
+
+This test builds an isolated source copy with an older runtime version. It never
+changes the source version or the personal library. It downloads the public
+release through the real application, observes replacement and restart, and
+checks that the edit graph, media, existing exports and unrelated root file
+survive. A real 1.1.9 → 1.2.0 update has passed this flow with a Windows-only PATH.
+
 | Path | Responsibility |
 |---|---|
 | `src/components` | Timeline, preview player and update dialog |

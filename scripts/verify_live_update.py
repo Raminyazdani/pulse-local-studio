@@ -24,7 +24,6 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKS = ROOT / "data" / "portable-checks"
-DEFAULT_FIXTURE = CHECKS / "run-20261114-220108-828b88" / "Moved Pulse آزمایش" / "data"
 CREATE_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
@@ -67,12 +66,32 @@ def minimal_environment() -> dict:
     return env
 
 
+def synthetic_fixture(selected: str | None) -> Path:
+    if selected:
+        return Path(selected).resolve()
+    completed = []
+    for report in CHECKS.glob("run-*/verification.json"):
+        try:
+            if read_json(report).get("passed") is not True:
+                continue
+            for data in report.parent.glob("Moved Pulse*/data"):
+                metadata = list((data / "media").glob("*/metadata.json"))
+                names = {read_json(file)["name"] for file in metadata}
+                if len(metadata) == 3 and names == {"portable-red.mov", "portable-blue.mov", "portable-kicks.wav"}:
+                    completed.append((report.stat().st_mtime, data.resolve()))
+        except (OSError, ValueError, KeyError):
+            continue
+    if not completed:
+        raise AssertionError("No successful synthetic portable fixture was found. Run scripts/verify_portable.py --browser first, or pass --fixture-data with its isolated data folder under data/portable-checks.")
+    return max(completed, key=lambda candidate: candidate[0])[1]
+
+
 def prepare(args) -> Path:
     if sys.platform != "win32":
         raise AssertionError("Build and run this frozen update test on Windows x64.")
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.old_version):
         raise AssertionError("Use an old version in major.minor.patch form.")
-    source = Path(args.fixture_data).resolve()
+    source = synthetic_fixture(args.fixture_data)
     # The known verification namespace contains synthetic fixtures only. Never
     # turn the user's main data/media library into an update test workspace.
     assert source.is_relative_to(CHECKS.resolve()), f"Fixture must stay inside {CHECKS}"
@@ -120,9 +139,21 @@ def stop_test_app(app: Path, base: str, expected_key: str, original: subprocess.
     # A failed browser assertion can land between the old process exiting and
     # the helper launching its replacement. Let an already-started transaction
     # settle before cleanup, so its later restart cannot leave an orphan server.
-    plans = list((app / "data" / "updates").glob("*/plan.json"))
+    plans = sorted((app / "data" / "updates").glob("*/plan.json"), key=lambda path: path.stat().st_mtime)[-1:]
+    def settled(plan: Path) -> bool:
+        for result in (plan.with_name("result.json"), app / "data" / "updates" / "last-result.json"):
+            try:
+                receipt = read_json(result)
+                if receipt.get("transactionId") == plan.parent.name and receipt.get("status") in {"complete", "error", "rolled-back"}:
+                    return True
+            except (OSError, ValueError):
+                pass
+        try:
+            return read_json(plan.with_name("cancelled.json")).get("cancelled") is True
+        except (OSError, ValueError):
+            return False
     settle = time.monotonic() + 180
-    while any(not plan.with_name("result.json").is_file() for plan in plans):
+    while any(not settled(plan) for plan in plans):
         if time.monotonic() >= settle:
             raise AssertionError("The isolated update helper did not settle during cleanup; inspect its local updater.log.")
         time.sleep(.3)
@@ -147,10 +178,13 @@ def stop_test_app(app: Path, base: str, expected_key: str, original: subprocess.
     raise AssertionError("The isolated updated app did not stop after its authenticated stop request.")
 
 
-def run_live(prepared_path: Path) -> dict:
+def run_live(prepared_path: Path, target_version: str | None = None) -> dict:
     prepared_path = prepared_path.resolve()
     assert prepared_path.is_relative_to(CHECKS.resolve()), "Prepared fixture must be in the isolated test namespace."
     prepared = read_json(prepared_path)
+    if target_version is not None:
+        assert re.fullmatch(r"\d+\.\d+\.\d+", target_version), "Target must use major.minor.patch."
+        prepared["targetVersion"] = target_version
     app = Path(prepared["app"]).resolve()
     check = prepared_path.parent
     assert app.is_relative_to(check), "Prepared app escaped its isolated test directory."
@@ -238,7 +272,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--prepared", type=Path, help="Run an already prepared fixture after its target release is published.")
-    parser.add_argument("--fixture-data", default=str(DEFAULT_FIXTURE))
+    parser.add_argument("--fixture-data", help="Synthetic three-media fixture data; defaults to the latest successful isolated portable verification.")
     parser.add_argument("--old-version", default="1.1.9")
     parser.add_argument("--target-version")
     parser.add_argument("--port", type=int, default=8890)
@@ -247,4 +281,4 @@ if __name__ == "__main__":
     if arguments.prepare_only:
         print(json.dumps({"prepared": str(fixture)}, ensure_ascii=False))
     else:
-        print(json.dumps(run_live(fixture), ensure_ascii=False, indent=2))
+        print(json.dumps(run_live(fixture, arguments.target_version), ensure_ascii=False, indent=2))
