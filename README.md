@@ -20,13 +20,25 @@ Keep `_internal`, `bin`, `dist` and `data` together. Running the EXE inside the 
 
 - Multiple video, image and audio tracks with moving, trimming, splitting and audio controls.
 - Non-destructive track merging while retaining original media.
-- Kick/bass transient detection with visible waveform markers and manual corrections.
+- Bass/body/bright transient detection, acoustic groups with audible samples, and manual corrections.
+- Individual or multiple beat selection, deletion, and interval/pattern repetition that replaces other markers.
 - Every-beat, every-Nth-beat, offset and repeating-mask selections such as `1001`.
+- Adjustable preview/timeline size, panel widths and workspace arrangement.
 - Ordered video signals mapped to music beats with an independent speed per interval.
 - Layered previews and final rendering from original media.
 - H.264/AAC MP4 and 10-bit ProRes 422 HQ/PCM MOV exports.
 - Projects saved inside the app folder, a project picker, JSON backups and Undo/Redo.
 - User-requested GitHub release checks and in-app installation of newer portable versions.
+
+## Beat workbench and layout in 1.4
+
+Resize the preview and timeline by dragging their divider or using the preview size controls. Open **Arrange workspace** to set panel positions, widths and timeline placement, or drag panel header grips and width dividers. The timeline can sit above or below the workspace. These layout preferences are browser settings, separate from the saved edit.
+
+After **Detect beats**, listen to the **Sound groups** samples and use their checkboxes to keep the attacks you want. Groups compare spectral content and attack shape: **Bass-heavy** means a larger measured low-frequency proportion, not guaranteed separation of one instrument. The detector searches frequency bands independently so a loud bright attack does not suppress a nearby quieter bass attack.
+
+Click a numbered timeline beat to pick it, **Ctrl-click** to toggle additional beats, or **Shift-click** to pick a range. The paginated **Individual beats** list provides the same selection through checkboxes. **Delete selected beats** or **Delete** removes picked markers while retaining the audio clip.
+
+In **Filter & repeat**, pick beats and choose a regular interval or a repeating selected pattern. Two picks suggest an interval; a single pick can use an explicit value such as **0.5 seconds**. Preview the resulting count and ghost markers before applying. The tool replaces other beat markers, preserves the music, and supports **Ctrl+Z**. **Use detected groups again** returns from edited/generated markers to the detection groups. See the [1.4 workbench guide](docs/beat-workbench-1.4.md) for timing examples.
 
 ## More precise editing in 1.3
 
@@ -41,7 +53,7 @@ Older projects remain readable. A single-asset trim can recover its available or
 ## From music to a finished edit
 
 1. **Import** music, footage and images. Use a file's `+` button or drag it onto a compatible track.
-2. Select the soundtrack and open **Beats**. Adjust sensitivity/minimum gap, run detection, and choose the beat selection pattern.
+2. Select the soundtrack and open **Beats**. Adjust sensitivity/minimum gap, run detection, audition sound groups, then select the groups or individual beats to keep. Use the sampling pattern or **Filter & repeat** when needed.
 3. Trim and arrange footage. Select its track and use **Merge track** if its clips should become one sequence; gaps are closed.
 4. Double-click a moment on the video clip, or place the playhead and press **M**, to add a beat signal. Drag signals to refine them; right-click to remove them.
 5. Open **Sync**, select the soundtrack and video sequence, choose the first destination beat, and sync. At least two signals and enough selected music beats are required.
@@ -96,9 +108,10 @@ Checks happen when requested. If you are offline or GitHub is unavailable, conti
 | Alt + drag clip | Slip source inside a fixed timeline clip |
 | Shift during drag | Bypass snapping |
 | Ctrl + mouse wheel | Zoom timeline around pointer |
+| Click beat number / Ctrl-click / Shift-click | Pick one beat / toggle a beat / pick a range |
 | S | Split selected clip at playhead |
 | M | Add a video signal at playhead |
-| Delete | Remove selected clips |
+| Delete | Remove picked beats; otherwise remove selected clips |
 | ← / → | Move one output frame |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+S | Save to folder and download a JSON backup |

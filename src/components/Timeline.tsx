@@ -16,6 +16,9 @@ interface Props {
   onDropMedia: (mediaId: string, trackId: string, time: number) => void;
   onMarker: (clipId: string, localOutput: number) => void; onMerge: () => void;
   onEditPreview?: (clips: Clip[] | null, time?: number) => void;
+  selectedBeats?: { clipId: string; times: number[] };
+  repeatPreview?: { clipId: string; times: number[] } | null;
+  onBeatSelect?: (clipId: string, time: number, additive: boolean, range: boolean) => void;
 }
 type DragType = 'move' | 'left' | 'right' | 'signal' | 'slip';
 type Drag = {
@@ -33,6 +36,7 @@ function sourceReadout(clip: Clip) {
 }
 
 export function Timeline(p: Props) {
+  const selectedBeatKeys = useMemo(() => new Set(p.selectedBeats?.times.map(t => t.toFixed(6)) ?? []), [p.selectedBeats]);
   const [snap, setSnap] = useState(true);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [viewportWidth, setViewportWidth] = useState(900);
@@ -308,7 +312,18 @@ export function Timeline(p: Props) {
                   <div className="clip-label">{track.kind === 'video' ? <Film size={12} /> : <Music2 size={12} />}<span>{clip.name}</span>{clip.segments.length > 1 && <span className="clip-badge">{clip.segments.length} clips</span>}{clip.warp && <span className="clip-badge">↗ SYNC</span>}{clip.muted && <VolumeX size={12} />}</div>
                   <span className="clip-duration">{clipDuration(clip).toFixed(2)}s</span>{range.in > .001 && <span className="source-edge-label">IN {formatTime(range.in, 2)}</span>}
                 </div>
-                {beats.map((beat, beatIndex) => <div key={beatIndex} className="beat-line" style={{ left: (beat - clip.start) * p.zoom }} title={`Beat ${beatIndex + 1} · ${beat.toFixed(3)}s`}><span>{beatIndex + 1}</span></div>)}
+                {beats.map((beat, beatIndex) => ({ beat, beatIndex })).filter(({ beat }) => beat * p.zoom >= scrollLeft - 24 && beat * p.zoom <= scrollLeft + viewportWidth - HEADER + 24).map(({ beat, beatIndex }) => {
+                  const local = beat - clip.start;
+                  const picked = p.selectedBeats?.clipId === clip.id && selectedBeatKeys.has(local.toFixed(6));
+                  return <div key={beatIndex} className={`beat-line ${picked ? 'beat-picked' : ''}`} data-beat-time={local.toFixed(6)} style={{ left: local * p.zoom }}>
+                    <button type="button" className="beat-number" aria-label={`Select timeline beat ${beatIndex + 1}`} aria-pressed={picked}
+                      title={`Beat ${beatIndex + 1} · ${beat.toFixed(3)}s · Ctrl/Shift for multiple`}
+                      onPointerDown={event => { event.stopPropagation(); }}
+                      onDoubleClick={event => event.stopPropagation()}
+                      onClick={event => { event.stopPropagation(); p.onBeatSelect?.(clip.id, local, event.ctrlKey || event.metaKey, event.shiftKey); }}>{beatIndex + 1}</button>
+                  </div>;
+                })}
+                {p.repeatPreview?.clipId === clip.id && p.repeatPreview.times.filter(t => (clip.start + t) * p.zoom >= scrollLeft - 24 && (clip.start + t) * p.zoom <= scrollLeft + viewportWidth - HEADER + 24).map(t => <div key={t.toFixed(6)} className="beat-repeat-ghost" style={{ left: t * p.zoom }} aria-hidden="true" />)}
                 {clip.signals.map((signal, signalIndex) => <div key={signalIndex} className="signal-line" style={{ left: sourceToOutput(clip, signal) * p.zoom }} title={`Signal ${signalIndex + 1} · right-click to remove`}
                   onPointerDown={event => begin(event, original, 'signal', signalIndex)} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); if (track.locked) return; const flat = flattenClip(clip); p.onChange({ ...p.project, clips: p.project.clips.map(item => item.id === clip.id ? { ...flat, signals: flat.signals.filter((_, markerIndex) => markerIndex !== signalIndex) } : item) }); }}><span>{signalIndex + 1}</span></div>)}
                 {!track.locked && <><div role="slider" aria-label={`Trim start of ${clip.name}`} aria-valuemin={0} aria-valuemax={range.total} aria-valuenow={range.in} className="trim-handle left" title="Trim start · drag outward to restore source" onPointerDown={event => begin(event, original, 'left')} /><div role="slider" aria-label={`Trim end of ${clip.name}`} aria-valuemin={0} aria-valuemax={range.total} aria-valuenow={range.out} className="trim-handle right" title="Trim end · drag outward to restore source" onPointerDown={event => begin(event, original, 'right')} /></>}

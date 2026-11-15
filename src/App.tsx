@@ -40,11 +40,13 @@ import type { Clip, ExportSettings, Media, Project, Track } from "./lib/types";
 import {
   alignClipToBeats,
   clipDuration,
+  deleteClipBeats,
   flattenClip,
   formatTime,
   mergeClips,
-  outputToSource,
   projectDuration,
+  replaceClipBeats,
+  selectedBeatInterval,
   sourceToOutput,
   splitClip,
   uid,
@@ -54,11 +56,13 @@ import {
   PROJECT_STORAGE_KEY,
   useProjectPersistence,
 } from "./lib/useProjectPersistence";
-import { api, canonicalBeats, downloadJSON, visibleBeats } from "./editor";
+import { api, downloadJSON, visibleBeats } from "./editor";
 import { Preview } from "./components/Preview";
 import { Timeline } from "./components/Timeline";
 import { SourceRange } from "./components/SourceRange";
 import { UpdateDialog } from "./components/UpdateDialog";
+import { BeatWorkbench } from "./components/BeatWorkbench";
+import { useWorkspaceResize, WorkspaceResizeHandle, WorkspacePanelHandles, PanelDragHandle, PreviewSizeControl } from "./components/WorkspaceResize";
 
 const STORAGE = PROJECT_STORAGE_KEY;
 function newProject(): Project {
@@ -115,10 +119,17 @@ type Job = {
 };
 
 export default function App() {
+  const workspaceResize = useWorkspaceResize();
   const [project, setProject] = useState<Project>(initialProject);
   const currentProject = useRef(project);
   currentProject.current = project;
   const [selected, setSelected] = useState<string[]>([]);
+  const [beatSelection, setBeatSelection] = useState<{ clipId: string; times: number[]; anchor?: number }>({ clipId: "", times: [] });
+  const [beatRepeatPreview, setBeatRepeatPreview] = useState<{ clipId: string; times: number[] } | null>(null);
+  const pauseForSample = useCallback(() => setPlaying(false), []);
+  const showBeatRepeatPreview = useCallback((clipId: string, beats: number[] | null) => {
+    setBeatRepeatPreview(beats ? { clipId, times: beats } : null);
+  }, []);
   const [editPreview, setEditPreview] = useState<Clip[] | null>(null);
   const [selectedTrack, setSelectedTrack] = useState("");
   const [time, setTime] = useState(0);
@@ -187,6 +198,8 @@ export default function App() {
       notify("Unlock this track to edit its clips.", true);
       return;
     }
+    if (["segments", "warp", "sourceWindow", "beatEdits", "beatConfig"].some(key => Object.prototype.hasOwnProperty.call(patch, key)))
+      setBeatSelection(previous => previous.clipId === id ? { clipId: "", times: [] } : previous);
     commit({
       ...project,
       clips: project.clips.map((c) => {
@@ -203,6 +216,7 @@ export default function App() {
     });
   };
   const undo = () => {
+    setBeatSelection({ clipId: "", times: [] });
     const previous = history.at(-1);
     if (previous) {
       setFuture((f) => [project, ...f]);
@@ -211,6 +225,7 @@ export default function App() {
     }
   };
   const redo = () => {
+    setBeatSelection({ clipId: "", times: [] });
     const next = future[0];
     if (next) {
       setHistory((h) => [...h, project]);
@@ -258,6 +273,8 @@ export default function App() {
 
   useEffect(() => {
     setEditPreview(null);
+    setBeatSelection({ clipId: "", times: [] });
+    setBeatRepeatPreview(null);
     setSelected([]);
     setSelectedTrack("");
     setTime(0);
@@ -330,6 +347,7 @@ export default function App() {
   }, [job?.id, job?.status, notify]);
 
   function select(ids: string[]) {
+    setBeatSelection({ clipId: "", times: [] });
     setSelected(ids);
     const c = project.clips.find((c) => c.id === ids[0]);
     if (c) {
@@ -527,18 +545,15 @@ export default function App() {
     const track = project.tracks.find((t) => t.id === target.trackId);
     if (track?.locked) return;
     if (local < 0 || local >= clipDuration(target)) return;
-    const source = outputToSource(
-      target,
-      Math.max(0, Math.min(clipDuration(target) - 0.001, local)),
-    );
     if (track?.kind === "audio") {
-      const beats = canonicalBeats(target, project.media);
-      const nearest = beats.findIndex((b) => Math.abs(b - source) < 0.1);
+      const beats = visibleBeats(target, project).map(t => t - target.start);
+      const nearest = beats.findIndex((b) => Math.abs(b - local) < 0.1);
       const edited =
         nearest >= 0
           ? beats.filter((_, i) => i !== nearest)
-          : [...beats, source].sort((a, b) => a - b);
-      updateClip(id, { beatEdits: edited });
+          : [...beats, local].sort((a, b) => a - b);
+      updateClip(id, replaceClipBeats(target, edited, project.media));
+      setBeatSelection({ clipId: "", times: [] });
       notify(nearest >= 0 ? "Beat removed." : "Manual beat added.");
     } else {
       const flat = flattenClip(target);
@@ -562,6 +577,7 @@ export default function App() {
     });
   }
   async function analyze() {
+    setBeatSelection({ clipId: "", times: [] });
     const target = clipTrack?.kind === "audio" ? clip : activeAudio;
     const media = project.media.find(
       (m) => m.id === target?.segments[0]?.mediaId,
@@ -576,6 +592,7 @@ export default function App() {
         beats: number[];
         bpm: number;
         waveform: number[];
+        beatGroups: NonNullable<Media["beatGroups"]>;
         duration: number;
       }>(`/api/analyze/${media.id}`, {
         method: "POST",
@@ -587,6 +604,7 @@ export default function App() {
         notify("Analysis completed. Reopen the soundtrack to load its detected beats.");
         return;
       }
+      setBeatSelection({ clipId: "", times: [] });
       commit({
         ...latest,
         media: latest.media.map((m) =>
@@ -594,13 +612,13 @@ export default function App() {
         ),
         clips: latest.clips.map((c) =>
           [...c.segments, ...(c.editSource?.segments ?? [])].some((s) => s.mediaId === media.id)
-            ? { ...c, beatEdits: undefined,
+            ? { ...c, beatEdits: undefined, beatConfig: { ...c.beatConfig, enabledGroups: undefined },
                 editSource: c.editSource ? { ...c.editSource, beatEdits: undefined } : undefined }
             : c,
         ),
       });
       notify(
-        `${result.beats.length} kick beats detected. Review markers and adjust if needed.`,
+        `${result.beats.length} attacks in ${result.beatGroups.length} sound groups. Listen and keep the groups you want.`,
       );
     } catch (e) {
       notify(`Analysis failed: ${(e as Error).message}`, true);
@@ -728,13 +746,15 @@ export default function App() {
       )
         return;
       const el = e.target as HTMLElement;
+      const beatCheckbox = el instanceof HTMLInputElement && el.type === "checkbox" && !!el.closest(".beat-workbench");
       if (
-        el.tagName === "INPUT" ||
+        (el.tagName === "INPUT" && !beatCheckbox) ||
         el.tagName === "TEXTAREA" ||
         el.tagName === "SELECT" ||
         el.isContentEditable
       )
         return;
+      if ((e.key === " " || e.key === "Enter") && (el.closest("button") || beatCheckbox)) return;
       if (e.key === " ") {
         e.preventDefault();
         if (duration > 0) setPlaying((v) => !v);
@@ -754,7 +774,17 @@ export default function App() {
       if (e.key.toLowerCase() === "y") setTool("slip");
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        removeSelected();
+        if (beatSelection.times.length) {
+          const target = project.clips.find(c => c.id === beatSelection.clipId);
+          if (target && !isLocked(target.id) && !busy) {
+            try { updateClip(target.id, deleteClipBeats(target, beatSelection.times, project.media)); }
+            catch (error) { notify((error as Error).message, true); }
+            setBeatSelection({ clipId: "", times: [] });
+          }
+        } else removeSelected();
+      }
+      if (e.key === "Escape") {
+        setBeatSelection({ clipId: "", times: [] });
       }
       if (e.key.toLowerCase() === "m" && clip)
         marker(clip.id, time - clip.start);
@@ -778,6 +808,8 @@ export default function App() {
   );
   const beatConfig = beatClip?.beatConfig ?? { every: 1, offset: 0 };
   const shownBeats = beatClip ? visibleBeats(beatClip, project) : [];
+  const beatSpacing = shownBeats.length > 2 ? selectedBeatInterval(shownBeats.slice(0, 2048)) : undefined;
+  const selectedBpm = beatSpacing ? 60 / beatSpacing : beatMedia?.bpm;
   const patchBeats = (patch: Partial<NonNullable<Clip["beatConfig"]>>) => {
     if (beatClip)
       updateClip(beatClip.id, { beatConfig: { ...beatConfig, ...patch } });
@@ -788,7 +820,9 @@ export default function App() {
 
   return (
     <div
-      className="studio"
+      ref={workspaceResize.containerRef}
+      className="studio resizable-workspace"
+      style={workspaceResize.style}
       aria-busy={!persistence.ready || persistence.switching}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
@@ -974,6 +1008,7 @@ export default function App() {
           <div className="panel-title">
             <div>
               <span className="eyebrow">YOUR WORKSPACE</span>
+              <PanelDragHandle resize={workspaceResize} panel="library" />
               <h2>
                 Media library<span>{project.media.length}</span>
               </h2>
@@ -1099,8 +1134,10 @@ export default function App() {
           <div className="preview-heading">
             <div>
               <span className="panel-heading">PROGRAM MONITOR</span>
+              <PanelDragHandle resize={workspaceResize} panel="preview" />
               <span className="subtle-tag">PREVIEW</span>
             </div>
+            <PreviewSizeControl resize={workspaceResize} />
             <select
               aria-label="Canvas aspect ratio"
               value={project.aspect ?? "16:9"}
@@ -1235,6 +1272,7 @@ export default function App() {
         </main>
         <aside className="inspector">
           <div className="inspector-tabs">
+            <PanelDragHandle resize={workspaceResize} panel="inspector" />
             <button
               className={tab === "clip" ? "active" : ""}
               onClick={() => setTab("clip")}
@@ -1523,8 +1561,8 @@ export default function App() {
                   </span>
                   <div>
                     <strong>
-                      {beatMedia?.bpm
-                        ? `${Math.round(beatMedia.bpm)} BPM`
+                      {selectedBpm
+                        ? `${Math.round(selectedBpm)} BPM`
                         : "Kick / bass detection"}
                     </strong>
                     <span>
@@ -1547,7 +1585,7 @@ export default function App() {
                   onChange={(e) => setSensitivity(+e.target.value)}
                 />
                 <label className="field-label spaced">
-                  MINIMUM GAP · SEC
+                  MINIMUM GAP PER SOUND BAND · SEC
                   <input
                     type="number"
                     min=".08"
@@ -1573,6 +1611,19 @@ export default function App() {
                   )}
                   Detect beats
                 </button>
+                {beatClip && <BeatWorkbench
+                  key={beatClip.id}
+                  clip={beatClip}
+                  media={project.media}
+                  selected={beatSelection.clipId === beatClip.id ? beatSelection.times : []}
+                  disabled={!!busy || !!isLocked(beatClip.id)}
+                  onSelection={times => setBeatSelection({ clipId: beatClip.id, times, anchor: times[0] })}
+                  onChange={next => updateClip(beatClip.id, next)}
+                  onPause={pauseForSample}
+                  onSeek={setTime}
+                  onError={message => notify(message, true)}
+                  onPreview={showBeatRepeatPreview}
+                />}
                 <div className="control-section">
                   <div className="section-label">
                     <span>BEAT SELECTION</span>
@@ -1842,7 +1893,9 @@ export default function App() {
             BUILT AROUND YOUR RHYTHM
           </div>
         </aside>
+        <WorkspacePanelHandles resize={workspaceResize} />
       </div>
+      <WorkspaceResizeHandle resize={workspaceResize} />
       <Timeline
         project={project}
         time={time}
@@ -1850,6 +1903,22 @@ export default function App() {
         selectedTrack={selectedTrack}
         zoom={zoom}
         tool={tool}
+        selectedBeats={beatSelection}
+        repeatPreview={beatRepeatPreview}
+        onBeatSelect={(clipId, at, additive, range) => {
+          const target = project.clips.find(c => c.id === clipId);
+          if (!target) return;
+          setSelected([clipId]); setSyncAudio(clipId); setTab("beats"); setPlaying(false); setTime(target.start + at);
+          setBeatSelection(previous => {
+            const old = previous.clipId === clipId ? previous.times : [];
+            const anchor = previous.clipId === clipId ? previous.anchor : undefined;
+            const between = range && anchor !== undefined
+              ? visibleBeats(target, project).map(t => t - target.start).filter(t => t >= Math.min(anchor, at) - 1e-5 && t <= Math.max(anchor, at) + 1e-5)
+              : undefined;
+            const times = between ?? (additive ? old.some(t => Math.abs(t - at) < .0001) ? old.filter(t => Math.abs(t - at) >= .0001) : [...old, at] : [at]);
+            return { clipId, times: [...new Set(times)].sort((a,b) => a-b), anchor: range ? anchor ?? at : at };
+          });
+        }}
         onTime={(t) => {
           setPlaying(false);
           setTime(t);

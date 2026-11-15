@@ -171,21 +171,24 @@ def waveform(samples: np.ndarray, bins: int = 1600) -> list[float]:
 
 def detect_beats(samples: np.ndarray, sample_rate: int = 22050,
                  sensitivity: float = 1, min_interval: float = .2) -> tuple[list[float], float | None]:
-    """Return actual bass-weighted transients, without inventing a rigid beat grid.
+    """Return actual multi-band attacks, without inventing a rigid beat grid.
 
-    Log spectral flux emphasizes the attack of kick drums; a short local median
-    removes sustained bass. The threshold is tunable because a beat remains an
-    editorial choice. Times use a 5.8 ms hop and a backwards attack correction.
+    Independently threshold bass, body and high-frequency spectral flux before
+    merging coincident attacks. A loud snare/hat can therefore no longer raise
+    one shared threshold or suppress a quieter nearby bass attack. Minimum
+    spacing applies within each frequency stream; coincident streams represent
+    one attack. Acoustic groups let the editor choose which attacks to retain.
     """
     if samples.size < 1024 or np.max(np.abs(samples)) < 1e-5:
         return [], None
     hop = 128
     frequencies = np.fft.rfftfreq(1024, 1/sample_rate)
     bass = (frequencies >= 32) & (frequencies <= 220)
-    body = (frequencies >= 220) & (frequencies <= 2400)
+    body = (frequencies >= 220) & (frequencies < 2400)
+    bright = (frequencies >= 2400) & (frequencies <= min(10000, sample_rate / 2))
     frame_count = int(np.ceil(samples.size/hop))+1
     times = np.arange(frame_count)*hop/sample_rate
-    low_flux, broad_flux = np.zeros(frame_count), np.zeros(frame_count)
+    streams = np.zeros((3, frame_count))
     window = (.5-.5*np.cos(2*np.pi*np.arange(1024)/1024)).astype(np.float32)
     previous = None
     # Bounded FFT batches keep a long song from allocating a full spectrogram
@@ -201,33 +204,40 @@ def detect_beats(samples: np.ndarray, sample_rate: int = 22050,
         prefix = logarithmic[:1] if previous is None else previous
         flux = np.maximum(np.diff(logarithmic,axis=0,prepend=prefix),0)
         previous = logarithmic[-1:].copy()
-        low_flux[first:final] = flux[:,bass].mean(axis=1)
-        broad_flux[first:final] = flux[:,body].mean(axis=1)
-
-    def normalize(array: np.ndarray) -> np.ndarray:
-        scale = max(float(np.percentile(array, 95)), 1e-8)
-        return array / scale
-
-    novelty = gaussian_filter1d(.86 * normalize(low_flux) + .14 * normalize(broad_flux), .7)
-    baseline = median_filter(novelty, size=max(3, int(.3 * sample_rate / hop) | 1))
-    novelty = np.maximum(novelty - baseline, 0)
-    peak_scale = max(float(np.percentile(novelty, 97)), float(novelty.max()) * .08, 1e-8)
-    threshold = peak_scale * .19 / max(.2, sensitivity)
-    peaks, _ = find_peaks(novelty, distance=max(1, int(min_interval * sample_rate / hop)),
-                          prominence=threshold, height=threshold)
+        for index, band in enumerate((bass, body, bright)):
+            if band.any():
+                streams[index, first:final] = flux[:,band].mean(axis=1)
     # Flux peaks sit shortly after the physical attack. Find the leading edge
     # within the same local peak rather than quantizing to a guessed tempo.
-    onsets = []
-    for peak in peaks:
-        left = peak
-        cutoff = novelty[peak] * .15
-        while left > max(0, peak - 8) and novelty[left - 1] > cutoff:
-            left -= 1
-        # STFT windows are centered: their leading flux edge precedes the
-        # physical transient by approximately 19 ms with this window size.
-        timestamp = max(0., float(times[left]) + .019)
-        if timestamp < samples.size / sample_rate:
-            onsets.append(round(timestamp, 6))
+    candidates: list[tuple[float, float]] = []
+    for flux in streams:
+        if float(flux.max()) < 1e-7:
+            continue
+        novelty = gaussian_filter1d(flux / max(float(np.percentile(flux, 95)), 1e-8), .7)
+        baseline = median_filter(novelty, size=max(3, int(.3 * sample_rate / hop) | 1))
+        novelty = np.maximum(novelty - baseline, 0)
+        peak_scale = max(float(np.percentile(novelty, 97)), float(novelty.max()) * .08, 1e-8)
+        threshold = peak_scale * .19 / max(.2, sensitivity)
+        peaks, _ = find_peaks(novelty, distance=max(1, int(min_interval * sample_rate / hop)),
+                              prominence=threshold, height=threshold)
+        for peak in peaks:
+            left = peak
+            cutoff = novelty[peak] * .15
+            while left > max(0, peak - 8) and novelty[left - 1] > cutoff:
+                left -= 1
+            # Centered STFT leading edges precede the physical attack by ~19 ms.
+            timestamp = max(0., float(times[left]) + .019)
+            if timestamp < samples.size / sample_rate:
+                candidates.append((timestamp, float(novelty[peak] / peak_scale)))
+    onsets: list[float] = []
+    cluster: list[tuple[float, float]] = []
+    for candidate in sorted(candidates):
+        if cluster and candidate[0] - cluster[0][0] > .045:
+            onsets.append(round(min(cluster, key=lambda value: value[0])[0], 6))
+            cluster = []
+        cluster.append(candidate)
+    if cluster:
+        onsets.append(round(min(cluster, key=lambda value: value[0])[0], 6))
     bpm = None
     if len(onsets) >= 3:
         intervals = np.diff(onsets)
@@ -237,15 +247,93 @@ def detect_beats(samples: np.ndarray, sample_rate: int = 22050,
     return onsets, bpm
 
 
+def group_beats(samples: np.ndarray, beats: list[float], sample_rate: int = 22050) -> list[dict]:
+    """Cluster real hits by normalized spectrum and attack shape, not loudness.
+
+    This is an acoustic similarity aid, not instrument/source separation. Each
+    detected beat belongs to exactly one deterministic group. Farthest-point
+    seeding and bounded Lloyd iterations avoid quadratic distance matrices for
+    long songs. Representatives are real group members suitable for audition.
+    """
+    if not beats or samples.size == 0:
+        return []
+    frequencies = np.fft.rfftfreq(4096, 1 / sample_rate)
+    bands = [(32, 180), (180, 500), (500, 1500), (1500, 4000), (4000, sample_rate / 2 + 1)]
+    masks = [(frequencies >= low) & (frequencies < high) for low, high in bands]
+    spectra, attacks = [], []
+    for beat in beats:
+        start = max(0, round((beat - .012) * sample_rate))
+        stop = min(samples.size, start + round(.17 * sample_rate))
+        snippet = np.asarray(samples[start:stop], dtype=np.float64)
+        if snippet.size < 2:
+            snippet = np.zeros(2)
+        spectrum = np.abs(np.fft.rfft(snippet * np.hanning(snippet.size), n=4096)) ** 2
+        power = np.array([float(spectrum[mask].sum()) for mask in masks])
+        power /= max(float(power.sum()), 1e-14)
+        spectra.append(power)
+        energy = snippet ** 2
+        attacks.append(float(energy[:round(.05 * sample_rate)].sum() / max(float(energy.sum()), 1e-14)))
+    powers = np.asarray(spectra)
+    # Square roots compare spectral proportions without allowing one very
+    # loud hit to dominate the grouping; attack shape has a smaller influence.
+    features = np.column_stack((np.sqrt(powers), np.asarray(attacks) * .3))
+    average = features.mean(axis=0)
+    centers = [features[int(np.argmin(np.sum((features - average) ** 2, axis=1)))].copy()]
+    while len(centers) < min(6, len(beats)):
+        distances = np.min(np.sum((features[:,None,:] - np.asarray(centers)[None,:,:]) ** 2, axis=2), axis=1)
+        farthest = int(np.argmax(distances))
+        if distances[farthest] < .32 ** 2:
+            break
+        centers.append(features[farthest].copy())
+    centers_array = np.asarray(centers)
+    labels = np.zeros(len(beats), dtype=np.int64)
+    for _ in range(24):
+        previous = labels.copy()
+        labels = np.argmin(np.sum((features[:,None,:] - centers_array[None,:,:]) ** 2, axis=2), axis=1)
+        for index in range(len(centers_array)):
+            members = features[labels == index]
+            if members.size:
+                centers_array[index] = members.mean(axis=0)
+        if np.array_equal(previous, labels):
+            break
+    records = []
+    for index, center in enumerate(centers_array):
+        members = np.flatnonzero(labels == index)
+        if not members.size:
+            continue
+        representative = int(members[np.argmin(np.sum((features[members] - center) ** 2, axis=1))])
+        profile = np.median(powers[members], axis=0)
+        bass_score = float(profile[0])
+        brightness = float(profile[3:].sum())
+        name = ("Bass-heavy" if bass_score >= .52 else "Low body" if bass_score >= .25 else
+                "Bright attack" if brightness >= .5 else "Mid attack" if profile[1:3].sum() >= .5 else "Mixed attack")
+        records.append(dict(label=name, beatIndices=members.tolist(),
+                            sampleTime=beats[representative],
+                            bassScore=round(bass_score, 4), _brightness=brightness))
+    records.sort(key=lambda group: (-group["bassScore"], group["_brightness"], group["beatIndices"][0]))
+    counts: dict[str, int] = {}
+    totals = {name: sum(group["label"] == name for group in records) for name in {group["label"] for group in records}}
+    for index, group in enumerate(records):
+        name = group["label"]
+        counts[name] = counts.get(name, 0) + 1
+        group.update(id=f"group-{index + 1}", label=name if totals[name] == 1 else f"{name} {counts[name]}")
+        group.pop("_brightness")
+    return records
+
+
 def analyze_media(media_id: str, sensitivity: float = 1, min_interval: float = .2) -> dict:
     media = get_media(media_id)
     if not media["hasAudio"]:
         raise ValueError("This media has no audio stream to analyze.")
     samples = decode_audio(original_path(media_id))
     beats, bpm = detect_beats(samples, sensitivity=sensitivity, min_interval=min_interval)
-    media.update(beats=beats, bpm=bpm, waveform=waveform(samples))
+    # Decoder padding or an audio stream longer than the container's usable
+    # timeline must not create project markers outside the imported duration.
+    beats = [beat for beat in beats if 0 <= beat < media["duration"]]
+    groups = group_beats(samples, beats)
+    media.update(beats=beats, beatGroups=groups, bpm=bpm, waveform=waveform(samples))
     save_metadata(media)
-    return {"beats": beats, "bpm": bpm, "waveform": media["waveform"], "duration": media["duration"]}
+    return {"beats": beats, "beatGroups": groups, "bpm": bpm, "waveform": media["waveform"], "duration": media["duration"]}
 
 
 def import_media(upload_path: Path, name: str, media_id: str) -> dict:

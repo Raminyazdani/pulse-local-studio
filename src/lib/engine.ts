@@ -1,4 +1,4 @@
-import type { BeatSelection, Clip, ClipEditSource, Media, Project, ResolvedClipTime, Segment, WarpPoint } from './types'
+import type { BeatGroup, BeatSelection, Clip, ClipEditSource, Media, Project, ResolvedClipTime, Segment, WarpPoint } from './types'
 
 const EPSILON = 1e-7
 
@@ -379,24 +379,163 @@ export function selectBeats(beats: number[], selection: BeatSelection = {}): num
   return ordered.filter((_, index) => index % every === offset)
 }
 
-/** Canonical local beat positions, accounting for source trims and segment speeds. */
-export function clipBeats(clip: Clip, media: Media[]): number[] {
-  if (clip.beatEdits) return selectBeats(clip.beatEdits, clip.beatConfig)
-  const beats: number[] = []
+export interface AvailableBeatGroup extends BeatGroup {
+  key: string
+  mediaId: string
+  /** Canonical local times for occurrences in the current source selection. */
+  beats: number[]
+  count: number
+}
+
+function assetBeatGroups(asset: Media): BeatGroup[] {
+  if (asset.beatGroups?.length) return asset.beatGroups
+  const beats = asset.beats ?? []
+  return beats.length ? [{ id: 'unclassified', label: 'Unclassified beats',
+    beatIndices: beats.map((_, index) => index), sampleTime: beats[0] }] : []
+}
+
+/** Groups actually represented by the clip, including trimmed and repeated spans. */
+export function availableBeatGroups(clip: Clip, media: Media[]): AvailableBeatGroup[] {
+  const rows = new Map<string, AvailableBeatGroup>()
   let cursor = 0
   for (const segment of clip.segments) {
     const asset = media.find(item => item.id === segment.mediaId)
     const speed = segmentSpeed(segment)
-    for (const beat of asset?.beats ?? []) {
+    if (asset) for (const group of assetBeatGroups(asset)) {
+      const beats = group.beatIndices.map(index => asset.beats?.[index])
+        .filter((beat): beat is number => beat !== undefined && beat >= segment.in - EPSILON && beat < segment.out - EPSILON)
+        .map(beat => cursor + Math.max(0, beat - segment.in) / speed)
+      if (!beats.length) continue
+      const key = `${asset.id}:${group.id}`
+      const row = rows.get(key)
+      if (row) row.beats.push(...beats)
+      else rows.set(key, { ...group, beatIndices: [...group.beatIndices], key, mediaId: asset.id, beats, count: 0 })
+    }
+    cursor += (segment.out - segment.in) / speed
+  }
+  return [...rows.values()].map(row => {
+    const beats = uniqueTimes(row.beats)
+    return { ...row, beats, count: beats.length }
+  })
+}
+
+/** Un-sampled canonical positions. Manual edits bypass acoustic group filtering. */
+export function canonicalClipBeats(clip: Clip, media: Media[], applyGroups = false): number[] {
+  if (clip.beatEdits !== undefined) return uniqueTimes(clip.beatEdits)
+  const beats: number[] = []
+  let cursor = 0
+  const enabled = applyGroups && clip.beatConfig?.enabledGroups !== undefined
+    ? new Set(clip.beatConfig.enabledGroups) : undefined
+  for (const segment of clip.segments) {
+    const asset = media.find(item => item.id === segment.mediaId)
+    const speed = segmentSpeed(segment)
+    const selectedIndices = enabled && asset ? new Set(assetBeatGroups(asset)
+      .filter(group => enabled.has(`${asset.id}:${group.id}`)).flatMap(group => group.beatIndices)) : undefined
+    for (const [index, beat] of (asset?.beats ?? []).entries()) {
+      if (selectedIndices && !selectedIndices.has(index)) continue
       if (beat >= segment.in - EPSILON && beat < segment.out - EPSILON) beats.push(cursor + Math.max(0, beat - segment.in) / speed)
     }
     cursor += (segment.out - segment.in) / speed
   }
-  return selectBeats(beats, clip.beatConfig)
+  return uniqueTimes(beats)
+}
+
+/** Canonical local beat positions, accounting for source trims, groups and sampling. */
+export function clipBeats(clip: Clip, media: Media[]): number[] {
+  return selectBeats(canonicalClipBeats(clip, media, true), clip.beatConfig)
 }
 
 export function clipBeatTimes(clip: Clip, media: Media[]): number[] {
   return clipBeats(clip, media).map(beat => clip.start + sourceToOutput(clip, beat))
+}
+
+export type BeatRepeatMode = 'regular' | 'pattern'
+export interface BeatRepeatOptions {
+  period: number
+  mode?: BeatRepeatMode
+  /** Fill the whole clip using the selected phase; false starts at the first selected beat. */
+  fillBefore?: boolean
+}
+const MAX_EDITED_BEATS = 100000
+
+function checkedBeatTimes(values: number[]): number[] {
+  if (!Array.isArray(values) || values.some(value => !Number.isFinite(value) || value < 0))
+    throw new Error('Beat times must be finite nonnegative seconds.')
+  if (values.length > MAX_EDITED_BEATS) throw new Error('A clip can contain at most 100,000 edited beats.')
+  return uniqueTimes(values)
+}
+
+/** Median spacing for a regular pulse, or the selected motif's span plus median gap. */
+export function selectedBeatInterval(selectedOutput: number[], mode: BeatRepeatMode = 'regular'): number | undefined {
+  if (mode !== 'regular' && mode !== 'pattern') throw new Error('Unknown beat repeat mode.')
+  const selected = checkedBeatTimes(selectedOutput)
+  if (selected.length < 2) return undefined
+  const gaps = selected.slice(1).map((value, index) => value - selected[index]).sort((a, b) => a - b)
+  const middle = Math.floor(gaps.length / 2)
+  const median = gaps.length % 2 ? gaps[middle] : (gaps[middle - 1] + gaps[middle]) / 2
+  return mode === 'pattern' ? selected.at(-1)! - selected[0] + median : median
+}
+
+/** Generate exact output-time beats from an explicitly selected phase/motif. */
+export function generateRepeatedBeats(selectedOutput: number[], duration: number, options: BeatRepeatOptions): number[] {
+  const selected = checkedBeatTimes(selectedOutput)
+  if (!selected.length) throw new Error('Select at least one beat to repeat.')
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 86400) throw new Error('Repeat requires a clip duration between zero and 24 hours.')
+  if (selected.some(value => value >= duration)) throw new Error('Selected beats must lie inside the visible clip.')
+  const { period, mode = 'regular', fillBefore = true } = options
+  if (!Number.isFinite(period) || period <= 0) throw new Error('Repeat period must be a positive number of seconds.')
+  if (mode !== 'regular' && mode !== 'pattern') throw new Error('Unknown beat repeat mode.')
+  const anchor = selected[0]
+  const offsets = mode === 'pattern' ? selected.map(value => value - anchor) : [0]
+  if (mode === 'pattern' && offsets.at(-1)! >= period - EPSILON)
+    throw new Error('The pattern repeat period must be longer than the selected pattern span.')
+  const result: number[] = []
+  for (const offset of offsets) {
+    const base = anchor + offset
+    const first = fillBefore ? Math.ceil((-base - EPSILON) / period) : 0
+    const last = Math.ceil((duration - base) / period) - 1
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || last - first + 1 > MAX_EDITED_BEATS - result.length)
+      throw new Error('This interval would create more than 100,000 beats. Choose a longer period.')
+    for (let cycle = first; cycle <= last; cycle++) {
+      const value = Math.round((base + cycle * period) * 1e10) / 1e10
+      if (value >= -EPSILON && value < duration - EPSILON) result.push(Math.max(0, value))
+    }
+  }
+  return uniqueTimes(result)
+}
+
+/** Replace visible beat markers only; source files and audio playback are unchanged. */
+export function replaceClipBeats(clip: Clip, outputBeats: number[], media: Media[] = []): Clip {
+  const beats = checkedBeatTimes(outputBeats)
+  const duration = clipDuration(clip)
+  if (beats.some(value => value >= duration)) throw new Error('Edited beats must lie inside the visible clip.')
+  const context = sourceContext(clip, media)
+  const flat = flattenVisibleClip(clip)
+  // Explicit replacement discards hidden corrections too. Extending this source
+  // later must not resurrect the markers the user just filtered away.
+  const retained = cloneSource(context.source)
+  retained.beatEdits = beats.map(value => context.a + value)
+  return { ...flat, beatEdits: beats, beatConfig: { every: 1, offset: 0 },
+    editSource: retained, sourceWindow: { in: context.a, out: context.b } }
+}
+
+/** Delete selected displayed markers, with selections expressed in local OUTPUT seconds. */
+export function deleteClipBeats(clip: Clip, selectedOutput: number[], media: Media[] = [], tolerance = 1e-5): Clip {
+  const selected = checkedBeatTimes(selectedOutput)
+  if (!selected.length) throw new Error('Select at least one beat to delete.')
+  if (!Number.isFinite(tolerance) || tolerance <= 0) throw new Error('Beat matching tolerance must be positive.')
+  const displayed = clipBeats(clip, media).map(value => sourceToOutput(clip, value))
+  let selectedIndex = 0
+  const remaining = displayed.filter(value => {
+    while (selectedIndex < selected.length && selected[selectedIndex] < value - tolerance) selectedIndex++
+    return selectedIndex >= selected.length || Math.abs(value - selected[selectedIndex]) > tolerance
+  })
+  if (remaining.length === displayed.length) throw new Error('The selected beats are no longer visible in this clip.')
+  return replaceClipBeats(clip, remaining, media)
+}
+
+export function repeatClipBeats(clip: Clip, selectedOutput: number[], options: BeatRepeatOptions, media: Media[] = []): Clip {
+  return replaceClipBeats(clip, generateRepeatedBeats(selectedOutput, clipDuration(clip), options), media)
 }
 
 /** Resample asset waveforms on the actual trimmed/compound/warped output timeline. */

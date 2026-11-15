@@ -343,6 +343,12 @@ def run(args) -> dict:
                                     timeout=600, creationflags=CREATE_FLAGS)
             assert result.returncode == 0, "Precision editing browser checks failed."
             report["checks"].append("browser reversible trim, stable waveform, source slip, frame preview and retained retime recovery")
+            editing_env["PULSE_BEAT_TEST"] = "1"
+            result = subprocess.run([node, str(ROOT / "node_modules" / "@playwright" / "test" / "cli.js"),
+                                     "test", "tests/beat-workbench.spec.ts", "tests/workspace.spec.ts"], cwd=ROOT, env=editing_env,
+                                    timeout=600, creationflags=CREATE_FLAGS)
+            assert result.returncode == 0, "Beat workbench or configurable workspace browser checks failed."
+            report["checks"].append("browser audible bass groups, beat selection/deletion, exact filter-repeat and configurable panel layout")
         report["passed"] = True
         return report
     finally:

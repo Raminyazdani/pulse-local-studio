@@ -1,22 +1,11 @@
 import type { Clip, Media, Project } from './lib/types';
-import { sourceToOutput, selectBeats } from './lib/engine';
+import { canonicalClipBeats, clipBeatTimes } from './lib/engine';
 
 export function canonicalBeats(clip: Clip, media: Media[]): number[] {
-  if (clip.beatEdits !== undefined) return clip.beatEdits;
-  let cursor = 0;
-  const values: number[] = [];
-  for (const segment of clip.segments) {
-    const asset = media.find(m => m.id === segment.mediaId);
-    for (const beat of asset?.beats ?? []) {
-      if (beat >= segment.in && beat < segment.out) values.push(cursor + (beat - segment.in) / (segment.speed ?? 1));
-    }
-    cursor += (segment.out - segment.in) / (segment.speed ?? 1);
-  }
-  return values.sort((a,b) => a-b);
+  return canonicalClipBeats(clip, media);
 }
 export function visibleBeats(clip: Clip, project: Project): number[] {
-  const beats = selectBeats(canonicalBeats(clip, project.media), clip.beatConfig ?? {every:1,offset:0});
-  return beats.map(b => clip.start + sourceToOutput(clip,b));
+  return clipBeatTimes(clip, project.media);
 }
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);

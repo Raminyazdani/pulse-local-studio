@@ -28,7 +28,7 @@ Vite forwards `/api` to port 8765. The local API reference is at `http://127.0.0
 
 ```powershell
 npm test
-.\.venv\Scripts\python.exe -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_updates -v
+.\.venv\Scripts\python.exe -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_beat_groups backend.test_beat_tools backend.test_updates -v
 ```
 
 Backend integration tests generate their own media and run FFmpeg. The backend test module is listed first because it initializes isolated media storage before other tests import shared path constants.
@@ -42,7 +42,7 @@ npx playwright install chromium
 
 The count above describes a clean public release. For a local private bundle, pass its actual media count or omit that assertion. The verifier reads the packaged library, copies application files into a test workspace, and generates synthetic fixtures there.
 
-With `--browser`, the verifier also runs precision-editing regressions against its disposable workspace: stable waveform peaks, reversible trim edges, fixed-container source slips, decoded preview frames, retained merged speed maps, manual-beat reset and edits made during asynchronous detection. The editing tests require an explicit matching workspace hash before they can write.
+With `--browser`, the verifier also runs precision-editing regressions against its disposable workspace: stable waveform peaks, reversible trim edges, fixed-container source slips, decoded preview frames, retained merged speed maps, manual-beat reset and edits made during asynchronous detection. Beat-workbench tests cover quiet-bass grouping, actual sample playback, selected-marker deletion, phase-preserving repetition and persistence. Workspace tests cover real panel resizing/reordering, timeline placement, cancellation and saved layout. These suites require an explicit matching workspace hash before they can write.
 
 ## Portable builds
 

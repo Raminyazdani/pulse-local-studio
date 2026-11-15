@@ -1,5 +1,15 @@
 export type MediaKind = 'video' | 'audio' | 'image'
 
+/** An acoustic cluster of detected attacks; indices refer to the asset's beats. */
+export interface BeatGroup {
+  id: string
+  label: string
+  beatIndices: number[]
+  /** Representative attack timestamp in the original media. */
+  sampleTime: number
+  bassScore?: number
+}
+
 export interface Media {
   id: string
   name: string
@@ -16,6 +26,7 @@ export interface Media {
   size?: number
   waveform?: number[]
   beats?: number[]
+  beatGroups?: BeatGroup[]
   bpm?: number | null
 }
 
@@ -100,6 +111,8 @@ export interface BeatSelection {
   offset?: number
   /** Repeating keep/drop mask, e.g. '100', '1,0,0' or [1, 0, 0]. */
   pattern?: string | number[]
+  /** Asset-qualified group keys. Undefined keeps all groups; [] keeps none. */
+  enabledGroups?: string[]
 }
 
 export interface ResolvedClipTime {

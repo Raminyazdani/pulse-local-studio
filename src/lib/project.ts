@@ -1,5 +1,5 @@
 import { selectBeats, sourceDuration } from './engine'
-import type { BeatSelection, Clip, Media, Project, Segment, Track, WarpPoint } from './types'
+import type { BeatGroup, BeatSelection, Clip, Media, Project, Segment, Track, WarpPoint } from './types'
 
 type JsonObject = Record<string, unknown>
 const TOLERANCE = 1e-5
@@ -46,6 +46,34 @@ function optionalNumber(value: unknown, label: string, minimum = 0): number | un
   return value === undefined ? undefined : number(value, label, minimum)
 }
 
+function parseBeatGroups(value: unknown, beats: number[], duration: number): BeatGroup[] {
+  if (beats.some(beat => beat >= duration)) fail('grouped detected beats must lie inside the source duration.')
+  const used = new Set<number>()
+  const ids = new Set<string>()
+  const groups = array(value, 'beat groups').map((entry): BeatGroup => {
+    const group = object(entry, 'beat group')
+    const id = string(group.id, 'beat group ID', true)
+    if (id.length > 128 || ids.has(id)) fail('beat group IDs must be unique and at most 128 characters.')
+    ids.add(id)
+    const label = string(group.label, 'beat group label', true)
+    const beatIndices = array(group.beatIndices, 'beat group indices').map(value => {
+      const index = number(value, 'beat group index')
+      if (!Number.isInteger(index) || index >= beats.length || used.has(index)) fail('each detected beat must belong to exactly one group.')
+      used.add(index)
+      return index
+    })
+    if (!beatIndices.length) fail('a beat group must contain at least one detected beat.')
+    const sampleTime = number(group.sampleTime, 'beat group sample time')
+    if (sampleTime >= duration || !beatIndices.some(index => Math.abs(beats[index] - sampleTime) <= TOLERANCE))
+      fail('a beat group sample must reference one of its detected attacks inside the source.')
+    const bassScore = optionalNumber(group.bassScore, 'beat group bass score')
+    if (bassScore !== undefined && bassScore > 1) fail('beat group bass score must be between zero and one.')
+    return { id, label, beatIndices, sampleTime, ...(bassScore === undefined ? {} : { bassScore }) }
+  })
+  if (used.size !== beats.length) fail('beat groups must cover every detected beat.')
+  return groups
+}
+
 function parseMedia(value: unknown, index: number): Media {
   const data = object(value, `media[${index}]`)
   const id = string(data.id, 'media ID', true)
@@ -69,6 +97,13 @@ function parseMedia(value: unknown, index: number): Media {
     if (data[key] !== undefined && data[key] !== null) media[key] = string(data[key], `media ${id} ${key}`)
   }
   if (data.beats !== undefined) media.beats = times(data.beats, `media ${id} beats`, duration)
+  if (data.beatGroups !== undefined) {
+    if (data.beats === undefined) fail('beat groups require detected beats.')
+    const originalBeats = array(data.beats, 'detected beats')
+    if (originalBeats.length !== media.beats!.length || originalBeats.some((value, index) => value !== media.beats![index]))
+      fail('grouped detected beats must be unique, ordered source timestamps.')
+    media.beatGroups = parseBeatGroups(data.beatGroups, media.beats!, duration)
+  }
   if (data.waveform !== undefined) media.waveform = array(data.waveform, `media ${id} waveform`).map((sample, sampleIndex) => number(sample, `waveform[${sampleIndex}]`))
   if (data.bpm !== undefined) media.bpm = data.bpm === null ? null : number(data.bpm, `media ${id} BPM`)
   return media
@@ -131,6 +166,12 @@ function parseBeatConfig(value: unknown): BeatSelection | undefined {
   const result: BeatSelection = {
     every: data.every === undefined ? 1 : number(data.every, 'beat sampling interval', 1),
     offset: data.offset === undefined ? 0 : number(data.offset, 'beat sampling offset'),
+  }
+  if (data.enabledGroups !== undefined) {
+    const keys = array(data.enabledGroups, 'enabled beat groups').map(value => string(value, 'enabled beat group key', true))
+    if (new Set(keys).size !== keys.length || keys.length > 10000 || keys.some(key => key.length > 300))
+      fail('enabled beat group keys must be unique and bounded.')
+    result.enabledGroups = keys
   }
   if (data.pattern !== undefined) {
     if (typeof data.pattern !== 'string' && !Array.isArray(data.pattern)) fail('beat pattern must be a string or a numeric mask.')

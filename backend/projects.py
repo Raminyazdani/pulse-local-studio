@@ -111,6 +111,11 @@ def _beat_config(value) -> None:
     offset = _number(data.get("offset", 0), "Beat offset")
     if int(every) != every or int(offset) != offset or offset >= every:
         raise ValueError("Beat interval and offset must be integers, with offset smaller than interval.")
+    if "enabledGroups" in data:
+        keys = [_string(value, "Enabled beat group key", True)
+                for value in _array(data["enabledGroups"], "Enabled beat groups")]
+        if len(set(keys)) != len(keys) or len(keys) > 10000 or any(len(key) > 300 for key in keys):
+            raise ValueError("Enabled beat group keys must be unique and bounded.")
     pattern = data.get("pattern", "")
     if pattern == "":
         return
@@ -123,6 +128,35 @@ def _beat_config(value) -> None:
             raise ValueError("Beat pattern needs 0/1 entries and at least one kept beat.")
     else:
         raise ValueError("Beat pattern must be a string or an array of 0/1 entries.")
+
+
+def _beat_groups(value, beats: list, duration: float) -> None:
+    if any(beat >= duration for beat in beats):
+        raise ValueError("Grouped detected beats must lie inside the source duration.")
+    if any(index and beat <= beats[index - 1] + 1e-7 for index, beat in enumerate(beats)):
+        raise ValueError("Grouped detected beats must be unique, ordered source timestamps.")
+    used, ids = set(), set()
+    for entry in _array(value, "Beat groups"):
+        group = _object(entry, "Beat group")
+        group_id = _string(group.get("id"), "Beat group ID", True)
+        if len(group_id) > 128 or group_id in ids:
+            raise ValueError("Beat group IDs must be unique and at most 128 characters.")
+        ids.add(group_id)
+        _string(group.get("label"), "Beat group label", True)
+        indices = _array(group.get("beatIndices"), "Beat group indices")
+        if not indices:
+            raise ValueError("A beat group must contain at least one detected beat.")
+        for index in indices:
+            if type(index) is not int or index < 0 or index >= len(beats) or index in used:
+                raise ValueError("Each detected beat must belong to exactly one group.")
+            used.add(index)
+        sample = _number(group.get("sampleTime"), "Beat group sample time")
+        if sample >= duration or not any(abs(beats[index] - sample) <= TOLERANCE for index in indices):
+            raise ValueError("A beat group sample must reference one of its detected attacks inside the source.")
+        if "bassScore" in group and _number(group["bassScore"], "Beat group bass score") > 1:
+            raise ValueError("Beat group bass score must be between zero and one.")
+    if len(used) != len(beats):
+        raise ValueError("Beat groups must cover every detected beat.")
 
 
 def _source_spans(value, media: dict, track_kind: str, label: str = "Clip") -> float:
@@ -192,6 +226,10 @@ def validate_project(value, expected_id: str | None = None) -> dict:
             _number(asset["bpm"], "Media BPM")
         if "beats" in asset:
             _times(asset["beats"], "Detected beats", duration)
+        if "beatGroups" in asset:
+            if "beats" not in asset:
+                raise ValueError("Beat groups require detected beats.")
+            _beat_groups(asset["beatGroups"], asset["beats"], duration)
         if "waveform" in asset:
             for amplitude in _array(asset["waveform"], "Waveform"):
                 _number(amplitude, "Waveform amplitude")

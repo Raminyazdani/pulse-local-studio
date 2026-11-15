@@ -66,3 +66,17 @@
   .pulse-preview-empty > span { font-size: 11px; }
   .pulse-preview-shortcut { margin-top: 10px; font-size: 8px; }
 }
+
+.studio.resizable-workspace .preview-canvas { container-type: size; }
+@container (max-height: 170px) {
+  .pulse-preview-empty .pulse-preview-emblem,
+  .pulse-preview-empty .pulse-preview-shortcut { display: none; }
+  .pulse-preview-empty { gap: 5px; padding: 8px; }
+  .pulse-preview-empty strong { font-size: 12px; }
+  .pulse-preview-empty > span { font-size: 10px; text-align: center; }
+  .pulse-preview-empty::after { inset: 7px; }
+}
+@container (max-height: 110px) {
+  .pulse-preview-empty > span { display: none; }
+  .pulse-preview-empty strong { font-size: 10px; text-align: center; }
+}
