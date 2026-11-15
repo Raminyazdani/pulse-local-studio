@@ -1,6 +1,6 @@
 # Pulse 1.4 · Beat workbench and workspace layout
 
-This guide describes the 1.4 implementation. Release validation is recorded separately; a feature description alone is not a claim that an unreleased package has passed its checks.
+This guide describes [Pulse v1.4.0](https://github.com/Raminyazdani/pulse-local-studio/releases/tag/v1.4.0).
 
 ## Resize and arrange the workspace
 
@@ -55,3 +55,11 @@ The preview count and marker positions are authoritative for the chosen interval
 ## Persistence and privacy
 
 Detection groups are stored with media metadata; clip group choices and edited beat markers travel with the project and `data` folder. Existing projects without groups remain readable and can be analyzed again. All detection, grouping, sample playback and rhythm generation run locally. Public source and portable releases exclude personal media and project data.
+
+## Release validation — 15 November 2026
+
+- **79 frontend tests and 56 backend tests passed**, including quiet bass under louder percussion, deterministic group membership, representative sample timestamps, group/project validation, phase-preserving repetition, source timing and layout bounds.
+- **12 source-browser scenarios passed**: audible group samples and immediate stop on leaving the panel, checkbox filtering, individual/multiple/range selection, beat deletion, exact repeat preview/application, selection invalidation after source edits, persistence, reversible trimming, original-media export and panel layout operations.
+- The [successful Windows release workflow](https://github.com/Raminyazdani/pulse-local-studio/actions/runs/43664626959) independently built and tested the frozen executable, including **11 browser scenarios**, MOV import, bass detection, original-media rendering, mute, concurrent launch and relocation to a path containing spaces and Persian text. The same complete portable verifier passed locally with a Windows-only runtime PATH containing no Python, Node or FFmpeg.
+- All **205 permanent local media, project and export files** matched the private portable copies byte for byte; all **39 media items** remained present. Public ZIP privacy, CRC and manifest checksum checks passed. The published ZIP SHA-256 is `02f335dbf33abe285e32c3dad4e21bd7e8e44ffc368d83ef581e2bbc887e38a1`.
+- A genuine published **1.3.0 → 1.4.0** installation passed through **Update now**, real GitHub download/hash verification, standalone helper replacement, automatic restart and browser reload. The saved graph, three video signals and six selected music beats remained unchanged; synthetic originals/proxies, existing exports and an unrelated root file stayed byte-identical. No browser JavaScript errors occurred, and the isolated updated app was stopped after verification.
