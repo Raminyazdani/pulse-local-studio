@@ -28,7 +28,7 @@ Vite forwards `/api` to port 8765. The local API reference is at `http://127.0.0
 
 ```powershell
 npm test
-.\.venv\Scripts\python.exe -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_beat_groups backend.test_beat_tools backend.test_video_signals backend.test_video_signals_core backend.test_updates -v
+.\.venv\Scripts\python.exe -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_beat_groups backend.test_beat_tools backend.test_video_signals backend.test_video_signals_core backend.test_portable_runtime backend.test_updates -v
 ```
 
 Backend integration tests generate their own media and run FFmpeg. The backend test module is listed first because it initializes isolated media storage before other tests import shared path constants.

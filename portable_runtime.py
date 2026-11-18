@@ -29,13 +29,34 @@ def notify(message: str, error: bool = False, quiet: bool = False) -> None:
         print(message, file=sys.stderr if error else sys.stdout)
 
 
-def local_json(url: str, token: str | None = None) -> dict:
+def local_json(url: str, token: str | None = None, *, timeout: float = 1.5) -> dict:
     headers = {"X-Pulse-Token": token} if token else {}
     request = urllib.request.Request(url, headers=headers, method="POST" if token else "GET")
     # A system HTTP proxy must never redirect local project data off the machine.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=1.5) as response:
+    with opener.open(request, timeout=timeout) as response:
         return json.load(response)
+
+
+def wait_existing_workspace(record_path: Path, key: str, timeout: float = 45) -> str | None:
+    """Wait for a mutex owner's cold start without creating another writer."""
+    deadline = time.monotonic() + max(0, timeout)
+    while (remaining := deadline - time.monotonic()) > 0:
+        try:
+            record = json.loads(record_path.read_text("utf-8"))
+            if not isinstance(record, dict) or type(record.get("port")) is not int or not 1024 <= record["port"] <= 65535:
+                raise ValueError("Invalid workspace runtime record.")
+            url = f"http://127.0.0.1:{record['port']}"
+            health = local_json(url + "/api/health", timeout=min(1.5, remaining))
+            if (time.monotonic() <= deadline and isinstance(health, dict) and health.get("ok") is True and
+                    health.get("workspaceKey") == key and health.get("portable") is True):
+                return url
+        except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(.15, remaining))
+    return None
 
 
 def acquire_workspace_mutex(key: str) -> bool:
@@ -123,18 +144,11 @@ def main() -> int:
     if not owns_workspace:
         # Another double-click can arrive before FastAPI finishes importing.
         # Wait for that instance instead of running two writers on one folder.
-        for _ in range(100):
-            try:
-                record = json.loads(record_path.read_text("utf-8"))
-                existing_url = f"http://127.0.0.1:{int(record['port'])}"
-                health = local_json(existing_url + "/api/health")
-                if health.get("workspaceKey") == key and health.get("portable") is True:
-                    if not args.no_browser:
-                        webbrowser.open(existing_url)
-                    return 0
-            except (OSError, ValueError, KeyError, urllib.error.URLError):
-                pass
-            time.sleep(.15)
+        existing_url = wait_existing_workspace(record_path, key)
+        if existing_url:
+            if not args.no_browser:
+                webbrowser.open(existing_url)
+            return 0
         notify("This Pulse workspace is already starting. Wait a few seconds, then open Pulse.exe again. If it does not open, check data/runtime/pulse.log.", True, args.no_browser)
         return 1
     if not (root / "dist" / "index.html").is_file():

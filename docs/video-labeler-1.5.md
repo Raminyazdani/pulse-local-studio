@@ -1,4 +1,4 @@
-# Video beat labeler · 1.5
+# Video beat labeler · 1.5.1
 
 The video labeler provides a large, focused view for marking the visual moments that should later align with music. It edits reusable source-file beat signals; it does not encode the video or burn labels into its frames.
 
@@ -51,3 +51,9 @@ If another session changes the same source labels, a stale different save is rej
 Source labels use `Media.sourceSignals` in original-file seconds. They live in the video's metadata under **data/media** and in the saved project's media snapshot. To transfer the complete work, keep the whole portable **data** folder with the application, including media metadata, originals and projects.
 
 All video inspection, source-label storage and sync mapping stay local. Labels are Pulse edit metadata, not a general-purpose MOV/MP4 metadata track or visible overlay in exported frames. Public repository and release packages exclude personal media, projects and their saved labels.
+
+## 1.5.1 startup fix and validation coverage
+
+Version **1.5.1** retains the focused labeler introduced in 1.5.0 and improves a slow portable cold start. If a second launch arrives while the first instance is importing its runtime, it waits up to **45 seconds** for the healthy server belonging to the same workspace instead of timing out after about 15 seconds. The workspace mutex still permits only one server writer; unrelated or unready runtime records are not accepted as a successful launch.
+
+Source validation passed **89 frontend tests** and **76 backend tests**, including five launcher regressions. Browser coverage includes **16 source-browser scenarios**: four labeler scenarios plus twelve existing editing, beat-workbench and layout scenarios. The 1.5.0 package passed its Windows release workflow. Final 1.5.1 frozen-package and live-update results are recorded separately by the release verification; these source results do not assert that those later checks have completed.

@@ -47,5 +47,5 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed.' }
           npm run build
           if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
-          python -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_beat_groups backend.test_beat_tools backend.test_video_signals backend.test_video_signals_core backend.test_updates -v
+          python -m unittest backend.test_backend backend.test_hdr backend.test_projects backend.test_edit_source backend.test_beat_groups backend.test_beat_tools backend.test_video_signals backend.test_video_signals_core backend.test_portable_runtime backend.test_updates -v
           if ($LASTEXITCODE -ne 0) { throw 'Backend tests failed.' }

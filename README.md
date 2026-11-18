@@ -31,11 +31,13 @@ Keep `_internal`, `bin`, `dist` and `data` together. Running the EXE inside the 
 - Projects saved inside the app folder, a project picker, JSON backups and Undo/Redo.
 - User-requested GitHub release checks and in-app installation of newer portable versions.
 
-## Focused video labeling in 1.5
+## Focused video labeling in 1.5.1
 
 Use **Label beats** on a library video to open a large labeling window. Zoom/pan the image independently of the source ruler, seek or step through frames, and add **M** signals, drag/edit their times, delete, Undo and save. **Compatible preview** plays the proxy; **Original resolution** allows closer inspection when the browser supports the source codec. Frame stepping uses the reported average frame rate, so variable-frame-rate footage and decoder/proxy timing have precision limits.
 
 Saved source signals are reused by new timeline clips. Existing clips stay unchanged unless **Also apply to existing unlocked video clips** is selected; that preserves their current frame/audio timing and requires a new **Sync** for the revised labels. Signals are local Pulse metadata, not burned into video. See the [video labeler guide](docs/video-labeler-1.5.md) for saving, conflicts, precision and reuse details.
+
+The **1.5.1** launcher also handles a slower cold start when Pulse is opened twice: the second launch waits for the healthy instance of the same workspace instead of starting another server or reporting the earlier short timeout.
 
 ## Beat workbench and layout in 1.4
 
