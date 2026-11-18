@@ -90,7 +90,7 @@ class PortableWorkspaceWaitTests(unittest.TestCase):
                 self.assertEqual(self.record.read_text("utf-8") if self.record.exists() else None, content)
 
     def test_mutex_loser_only_reuses_ready_owner_without_starting_or_writing(self):
-        data = Path(self.temporary.name) / "workspace"
+        data = (Path(self.temporary.name) / "workspace").resolve()
         runtime = data / "runtime"
         runtime.mkdir(parents=True)
         record = runtime / "server.json"
