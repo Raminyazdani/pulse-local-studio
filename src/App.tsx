@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   Activity,
   ArrowDownToLine,
@@ -62,6 +63,8 @@ import { Timeline } from "./components/Timeline";
 import { SourceRange } from "./components/SourceRange";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { BeatWorkbench } from "./components/BeatWorkbench";
+import { VideoSignalEditor } from "./components/VideoSignalEditor";
+import { applyVideoSourceSignals, createVideoClipSignals } from "./lib/videoSignals";
 import { useWorkspaceResize, WorkspaceResizeHandle, WorkspacePanelHandles, PanelDragHandle, PreviewSizeControl } from "./components/WorkspaceResize";
 
 const STORAGE = PROJECT_STORAGE_KEY;
@@ -148,6 +151,9 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [signalEditor, setSignalEditor] = useState<{ media: Media; initialSignals: number[] } | null>(null);
+  const signalSaveBaseline = useRef<number[] | null>(null);
+  const [openingSignalEditor, setOpeningSignalEditor] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [exportSettings, setExportSettings] = useState<ExportSettings>({
     width: 1920,
@@ -437,7 +443,7 @@ export default function App() {
       segments: [
         { mediaId: media.id, in: 0, out: media.duration || 5, speed: 1 },
       ],
-      signals: [],
+      signals: media.kind === "video" ? createVideoClipSignals([media], [{ mediaId: media.id, in: 0, out: media.duration, speed: 1 }]) : [],
       muted: false,
       volume: 1,
     };
@@ -451,6 +457,56 @@ export default function App() {
       setSyncVideo(added.id);
       setTab("clip");
     }
+  }
+  async function openVideoSignals(mediaId: string) {
+    if (busy || openingSignalEditor || !persistence.ready || persistence.switching) return;
+    const media = currentProject.current.media.find(m => m.id === mediaId);
+    const openingProject = currentProject.current.id;
+    if (!media || media.kind !== "video") return;
+    setPlaying(false); setEditPreview(null); setProjectMenu(false);
+    setBeatSelection({ clipId: "", times: [] }); setOpeningSignalEditor(mediaId);
+    try {
+      const latest = await api<{ media: Media; signals: number[] }>(`/api/media/${encodeURIComponent(mediaId)}/signals`);
+      if (currentProject.current.id !== openingProject) return;
+      setPlaying(false);
+      signalSaveBaseline.current = latest.signals;
+      setSignalEditor({ media: latest.media, initialSignals: latest.signals });
+    } catch (error) { notify(`Cannot open video labels: ${(error as Error).message}`, true); }
+    finally { setOpeningSignalEditor(null); }
+  }
+  async function saveVideoSignals(signals: number[], applyToExisting: boolean) {
+    if (!signalEditor) return;
+    const result = await api<{ media: Media }>(`/api/media/${encodeURIComponent(signalEditor.media.id)}/signals`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signals, expectedSignals: signalSaveBaseline.current ?? signalEditor.initialSignals }),
+    });
+    const latest = currentProject.current;
+    const savedSignals = result.media.sourceSignals ?? [];
+    signalSaveBaseline.current = savedSignals;
+    const patchMedia = (snapshot: Project): Project => ({ ...snapshot,
+      media: snapshot.media.map(m => m.id === result.media.id ? { ...m, ...result.media } : m),
+    });
+    const baseline = patchMedia(latest);
+    let changed = 0, locked = 0;
+    const clips = baseline.clips.map(c => {
+      if (!applyToExisting || ![...c.segments, ...(c.editSource?.segments ?? [])].some(s => s.mediaId === result.media.id)) return c;
+      if (baseline.tracks.find(t => t.id === c.trackId)?.locked) { locked++; return c; }
+      const updated = applyVideoSourceSignals(c, baseline.media, result.media.id, savedSignals);
+      if (JSON.stringify(updated) !== JSON.stringify(c)) changed++;
+      return updated;
+    });
+    // Library labels are durable source metadata. Timeline Undo changes clip
+    // instances, while history snapshots keep the current library annotations.
+    flushSync(() => {
+      currentProject.current = baseline;
+      setHistory(h => h.map(patchMedia)); setFuture(f => f.map(patchMedia));
+      if (changed) commit({ ...baseline, clips });
+      else setProject(baseline);
+    });
+    try { await persistence.flush(); }
+    catch (error) { throw new Error(`Library labels were saved, but the project could not be saved. Retry Save labels. ${(error as Error).message}`); }
+    setSignalEditor(null);
+    notify(`${savedSignals.length} video signals saved${changed ? ` · ${changed} timeline clips updated` : ""}${locked ? ` · ${locked} locked clips left unchanged` : ""}.`);
   }
   async function upload(files: FileList | File[] | null) {
     if (!files?.length) return;
@@ -740,6 +796,8 @@ export default function App() {
         !persistence.ready ||
         persistence.switching ||
         updateOpen ||
+        signalEditor ||
+        openingSignalEditor ||
         exportOpen ||
         help ||
         editPreview !== null
@@ -828,7 +886,7 @@ export default function App() {
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
       onDrop={(e) => {
-        if (!persistence.ready || persistence.switching) {
+        if (!persistence.ready || persistence.switching || signalEditor) {
           e.preventDefault();
           return;
         }
@@ -859,6 +917,8 @@ export default function App() {
           onBeforeInstall={prepareUpdate}
         />
       )}
+      {signalEditor && <VideoSignalEditor media={signalEditor.media} initialSignals={signalEditor.initialSignals}
+        onSave={saveVideoSignals} onClose={() => setSignalEditor(null)} />}
       <header className="app-header">
         <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
           <span className="brand-mark">
@@ -1099,6 +1159,14 @@ export default function App() {
                           : "Original quality"}
                     </small>
                   </div>
+                  {m.kind === "video" && <button type="button" className="asset-label-button" draggable={false}
+                    title={`Label beats in ${m.name}`} aria-label={`Label beats in ${m.name}`}
+                    disabled={!!busy || !!openingSignalEditor || !persistence.ready || persistence.switching}
+                    onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); void openVideoSignals(m.id); }}>
+                    {openingSignalEditor === m.id ? <LoaderCircle size={12} className="spin" /> : <Flag size={12} />}
+                    <span>Label beats</span>{!!m.sourceSignals?.length && <b>{m.sourceSignals.length}</b>}
+                  </button>}
                 </div>
               ))}
             {!project.media.length && (

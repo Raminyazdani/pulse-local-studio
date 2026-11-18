@@ -106,6 +106,18 @@ function parseMedia(value: unknown, index: number): Media {
   }
   if (data.waveform !== undefined) media.waveform = array(data.waveform, `media ${id} waveform`).map((sample, sampleIndex) => number(sample, `waveform[${sampleIndex}]`))
   if (data.bpm !== undefined) media.bpm = data.bpm === null ? null : number(data.bpm, `media ${id} BPM`)
+  if (data.sourceSignals !== undefined) {
+    if (media.kind !== 'video') fail(`media ${id} source signals are only valid for video.`)
+    const values = array(data.sourceSignals, `media ${id} source signals`)
+    if (values.length > 100000) fail('a video can contain at most 100,000 source signals.')
+    media.sourceSignals = values.map((value, signalIndex) => {
+      const time = number(value, `media ${id} source signals[${signalIndex}]`)
+      if (time >= duration) fail(`media ${id} source signals must lie before the source end.`)
+      if (signalIndex && time - (values[signalIndex - 1] as number) <= 1e-7)
+        fail(`media ${id} source signals must be unique and ordered.`)
+      return time
+    })
+  }
   return media
 }
 

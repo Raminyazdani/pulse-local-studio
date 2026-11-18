@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from .media import DATA, MEDIA, ROOT, analyze_media, get_media, import_media, list_media, media_directory, original_path, public_media, safe_remove_import
+from .media import DATA, MEDIA, ROOT, SourceSignalConflict, analyze_media, get_media, import_media, list_media, media_directory, original_path, public_media, safe_remove_import, save_video_signals, video_signal_media
 from .render import JOBS, get_job, start_export
 from .projects import list_projects, load_project, load_active_project, save_project, set_active_project
 from .version import VERSION
@@ -32,7 +32,8 @@ MEDIA_UPDATE_ADMISSION = threading.RLock()
 @app.middleware("http")
 async def protect_update_operations(request: Request, call_next):
     path = request.url.path
-    media_operation = request.method == "POST" and (path in {"/api/media", "/api/export"} or path.startswith("/api/analyze/"))
+    media_operation = ((request.method == "POST" and (path in {"/api/media", "/api/export"} or path.startswith("/api/analyze/"))) or
+                       (request.method == "PUT" and path.startswith("/api/media/") and path.endswith("/signals")))
     if not media_operation:
         return await call_next(request)
     with MEDIA_UPDATE_ADMISSION:
@@ -127,6 +128,41 @@ def stop_runtime(request: Request):
 @app.get("/api/media")
 def media_list():
     return {"media": [public_media(item) for item in list_media()]}
+
+
+@app.get("/api/media/{media_id}/signals")
+def source_signal_file(media_id: str):
+    try:
+        media = video_signal_media(media_id)
+        return {"media": public_media(media), "signals": media.get("sourceSignals", [])}
+    except FileNotFoundError:
+        raise HTTPException(404, "Video media not found.")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.put("/api/media/{media_id}/signals")
+async def source_signal_save(media_id: str, request: Request):
+    try:
+        import json
+        content = await request.body()
+        if len(content) > 4 * 1024 * 1024:
+            raise HTTPException(413, "Video source labels exceed the 4 MB request limit.")
+        payload = json.loads(content)
+        if not isinstance(payload, dict) or "signals" not in payload or set(payload) - {"signals", "expectedSignals"}:
+            raise ValueError("Send a signals array and optional expectedSignals baseline.")
+        if "expectedSignals" in payload and payload["expectedSignals"] is None:
+            raise ValueError("expectedSignals must be an array when provided.")
+        media = await asyncio.to_thread(save_video_signals, media_id, payload["signals"], payload.get("expectedSignals"))
+        return {"media": media}
+    except FileNotFoundError:
+        raise HTTPException(404, "Video media not found.")
+    except SourceSignalConflict as exc:
+        raise HTTPException(409, str(exc))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        raise HTTPException(507, "Cannot save the video labels. Check free space and folder permissions.") from exc
 
 
 @app.get("/api/projects")

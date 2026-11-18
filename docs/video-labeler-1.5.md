@@ -1,0 +1,53 @@
+# Video beat labeler · 1.5
+
+The video labeler provides a large, focused view for marking the visual moments that should later align with music. It edits reusable source-file beat signals; it does not encode the video or burn labels into its frames.
+
+## Open a source from the library
+
+Choose **Label beats** on a video card in **Media library**. The editor opens the original source timeline with its saved labels, even if the video has not yet been added to a track. Main-editor playback pauses while the labeler is in use. Audio and still-image library cards do not have this action.
+
+The large window contains video inspection, source seeking and signal controls. **Fullscreen video labeler** can use the browser's fullscreen mode when available.
+
+## Inspect the image and choose a moment
+
+- **Image zoom** enlarges the displayed image from 100% to 800%. Use its slider/buttons, the wheel over the video, or `+`/`-`; drag a zoomed image to pan. **Fit** resets zoom and pan. Double-click toggles a closer view and Fit.
+- **Timeline zoom** separately enlarges the source ruler. Scroll it to inspect closely spaced signals; it does not magnify the picture.
+- Use the source scrubber or click the source ruler to seek. The time and zero-based frame fields allow numerical positioning.
+- **Previous/Next frame** or **←/→** step by one reported frame interval. **Shift+←/→** or the ten-frame buttons move ten intervals.
+- **Space** plays/pauses; inspection speeds are **0.25×**, **0.5×** and **1×**. These speeds change only the inspection player.
+
+Image zoom, pan, inspection speed and ruler zoom do not change the edit's crop, output resolution, source file or existing timeline playback rates.
+
+### Compatible preview and original resolution
+
+**Compatible preview** uses the browser-friendly proxy. **Original resolution** requests the untouched source file for closer pixel inspection, if its codec is supported by the browser. Some MOV codecs, including some camera/master formats, cannot play directly in a browser. Use **Use compatible preview** if original decoding fails; the source file stays intact.
+
+The frame controls use the imported average frame rate, with a 30 fps fallback when no usable rate is available. Variable-frame-rate files do not have uniformly spaced original frames, so stepping by `1 / average fps` is an inspection interval rather than a guaranteed native next-frame index. Where supported, labeling a playing video records the browser's presented-frame media timestamp. Decoder/proxy timing and the chosen export frame rate still bound the practical precision; the editor does not promise exact native-frame indexing for every codec/VFR source.
+
+## Add and refine signals
+
+1. Seek or play to the desired visual moment.
+2. Press **M** or **Add signal**. Double-clicking the source ruler can also add a signal there.
+3. Click a signal in the list or ruler to select and seek to it. Drag its ruler marker or edit its time to refine the position.
+4. Use its delete button, **Delete selected signal**, or **Delete/Backspace** to remove the selected marker.
+5. Use the labeler's **Undo/Redo** or **Ctrl+Z / Ctrl+Shift+Z** to revise the draft. **Ctrl+S** saves the labels.
+
+Signals are ordered original-source seconds before the source duration's end. Normal frame-based edits snap to the reported frame grid; existing exact timestamps are retained until edited. The source originals and proxies are never rewritten by label edits.
+
+## Save, cancel and reuse
+
+**Save labels** stores the source annotation in the library metadata and the active project's media snapshot, then closes after the project copy reaches its folder. New timeline clips made from that library video automatically receive those signals, mapped through their source ranges and speeds. A saved label can therefore be reused each time the source is added.
+
+Existing timeline clips keep their manually edited signals by default. Check **Also apply to existing unlocked video clips** only when you want to replace signals belonging to this file in the current project. Other source files in a merged composition retain their own signals; locked clips are left alone. Hidden retained ranges are updated too, so later extension remains consistent.
+
+Applying to an existing retimed clip preserves the current displayed frames, audio timing and duration by baking its present speed map into its source spans. It clears the previous signal-to-music association: run **Sync** again to align the revised signal sequence with music. Main-timeline Undo can undo this instance edit; the saved library annotation remains current.
+
+**Cancel** discards an unsaved label draft. Closing with unsaved changes displays a reminder to save or use Cancel. A successful source save is durable: if a later project-folder save fails, the error says so and **Save labels** can be retried safely. The server accepts an identical retry without overwriting a newer different result.
+
+If another session changes the same source labels, a stale different save is rejected instead of silently replacing that work. Reopen the labeler to load and review the current source labels.
+
+## Persistence and privacy
+
+Source labels use `Media.sourceSignals` in original-file seconds. They live in the video's metadata under **data/media** and in the saved project's media snapshot. To transfer the complete work, keep the whole portable **data** folder with the application, including media metadata, originals and projects.
+
+All video inspection, source-label storage and sync mapping stay local. Labels are Pulse edit metadata, not a general-purpose MOV/MP4 metadata track or visible overlay in exported frames. Public repository and release packages exclude personal media, projects and their saved labels.

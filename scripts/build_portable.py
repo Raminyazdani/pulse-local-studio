@@ -46,6 +46,7 @@ def copy_data(source: Path, destination: Path) -> None:
 def create_archive(without_data: bool = False) -> None:
     archive = OUTPUT.parent / "Pulse-Portable-Windows-x64.zip"
     files = [p for p in OUTPUT.rglob("*") if p.is_file() and "runtime" not in p.relative_to(OUTPUT).parts
+             and p.relative_to(OUTPUT).parts[:2] != ("data", "updates")
              and (not without_data or p.relative_to(OUTPUT).parts[0] not in {"data", "Project backups"})]
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as output:
         for index, path in enumerate(files, 1):

@@ -24,11 +24,18 @@ Keep `_internal`, `bin`, `dist` and `data` together. Running the EXE inside the 
 - Individual or multiple beat selection, deletion, and interval/pattern repetition that replaces other markers.
 - Every-beat, every-Nth-beat, offset and repeating-mask selections such as `1001`.
 - Adjustable preview/timeline size, panel widths and workspace arrangement.
+- A focused video beat labeler opened from the library, with image zoom/pan, frame controls and reusable source signals.
 - Ordered video signals mapped to music beats with an independent speed per interval.
 - Layered previews and final rendering from original media.
 - H.264/AAC MP4 and 10-bit ProRes 422 HQ/PCM MOV exports.
 - Projects saved inside the app folder, a project picker, JSON backups and Undo/Redo.
 - User-requested GitHub release checks and in-app installation of newer portable versions.
+
+## Focused video labeling in 1.5
+
+Use **Label beats** on a library video to open a large labeling window. Zoom/pan the image independently of the source ruler, seek or step through frames, and add **M** signals, drag/edit their times, delete, Undo and save. **Compatible preview** plays the proxy; **Original resolution** allows closer inspection when the browser supports the source codec. Frame stepping uses the reported average frame rate, so variable-frame-rate footage and decoder/proxy timing have precision limits.
+
+Saved source signals are reused by new timeline clips. Existing clips stay unchanged unless **Also apply to existing unlocked video clips** is selected; that preserves their current frame/audio timing and requires a new **Sync** for the revised labels. Signals are local Pulse metadata, not burned into video. See the [video labeler guide](docs/video-labeler-1.5.md) for saving, conflicts, precision and reuse details.
 
 ## Beat workbench and layout in 1.4
 
@@ -55,7 +62,7 @@ Older projects remain readable. A single-asset trim can recover its available or
 1. **Import** music, footage and images. Use a file's `+` button or drag it onto a compatible track.
 2. Select the soundtrack and open **Beats**. Adjust sensitivity/minimum gap, run detection, audition sound groups, then select the groups or individual beats to keep. Use the sampling pattern or **Filter & repeat** when needed.
 3. Trim and arrange footage. Select its track and use **Merge track** if its clips should become one sequence; gaps are closed.
-4. Double-click a moment on the video clip, or place the playhead and press **M**, to add a beat signal. Drag signals to refine them; right-click to remove them.
+4. Use the library video's **Label beats** window for focused source labeling, or double-click a moment on a timeline video / place the playhead and press **M**. Saved library signals are reused on new clips; existing timeline signals can also be dragged or removed with a right-click.
 5. Open **Sync**, select the soundtrack and video sequence, choose the first destination beat, and sync. At least two signals and enough selected music beats are required.
 6. Review the preview and use **Export film** to render.
 

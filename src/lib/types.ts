@@ -27,6 +27,8 @@ export interface Media {
   waveform?: number[]
   beats?: number[]
   beatGroups?: BeatGroup[]
+  /** Reusable video sync labels in original-media seconds; source files stay unchanged. */
+  sourceSignals?: number[]
   bpm?: number | null
 }
 

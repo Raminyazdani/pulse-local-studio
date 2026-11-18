@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -24,6 +26,21 @@ for directory in (MEDIA, EXPORTS):
 CREATE_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 PREVIEW_VERSION = 2
 HDR_TRANSFERS = {"arib-std-b67", "smpte2084"}
+SOURCE_SIGNAL_LIMIT = 100000
+SOURCE_SIGNAL_EPSILON = 1e-7
+_METADATA_LOCKS: dict[tuple[str, str], threading.RLock] = {}
+_METADATA_LOCKS_GUARD = threading.Lock()
+
+
+def metadata_lock(media_id: str):
+    """Serialize one item's metadata read/modify/write without blocking decoding."""
+    try:
+        canonical = str(uuid.UUID(media_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise FileNotFoundError("Media not found") from exc
+    key = (str(MEDIA.resolve()), canonical)
+    with _METADATA_LOCKS_GUARD:
+        return _METADATA_LOCKS.setdefault(key, threading.RLock())
 
 
 def source_color_metadata(video: dict | None) -> dict:
@@ -120,21 +137,86 @@ def media_directory(media_id: str) -> Path:
 
 
 def get_media(media_id: str) -> dict:
-    return json.loads((media_directory(media_id) / "metadata.json").read_text("utf-8"))
+    with metadata_lock(media_id):
+        return json.loads((media_directory(media_id) / "metadata.json").read_text("utf-8"))
 
 
-def save_metadata(media: dict) -> None:
-    directory = MEDIA / media["id"]
-    temporary = directory / "metadata.tmp"
-    temporary.write_text(json.dumps(media, ensure_ascii=False), "utf-8")
-    temporary.replace(directory / "metadata.json")
+def save_metadata(media: dict, *, replace_source_signals: bool = False) -> None:
+    with metadata_lock(media["id"]):
+        directory = MEDIA / str(uuid.UUID(media["id"]))
+        destination = directory / "metadata.json"
+        # Analysis/preview jobs may have read their snapshot before a labeling
+        # session saved. Only the explicit label writer may replace these marks.
+        if not replace_source_signals and destination.is_file():
+            previous = json.loads(destination.read_text("utf-8"))
+            if "sourceSignals" in previous:
+                media["sourceSignals"] = previous["sourceSignals"]
+        temporary = directory / f"metadata.{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8") as stream:
+                json.dump(media, stream, ensure_ascii=False, allow_nan=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+class SourceSignalConflict(ValueError):
+    """Another labeling session saved newer source marks."""
+
+
+def normalized_source_signals(values, duration: float) -> list[float]:
+    if not isinstance(values, list) or len(values) > SOURCE_SIGNAL_LIMIT:
+        raise ValueError("Video source signals must be an array of at most 100,000 timestamps.")
+    if (not isinstance(duration, (int, float)) or isinstance(duration, bool) or
+            duration <= 0 or duration > 86400 or not math.isfinite(duration)):
+        raise ValueError("This video has no valid source duration.")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or
+           value < 0 or value >= duration or not math.isfinite(value) for value in values):
+        raise ValueError("Video source signals must be finite timestamps inside the original video.")
+    ordered = sorted(float(value) for value in values)
+    result = []
+    for value in ordered:
+        if not result or value - result[-1] > SOURCE_SIGNAL_EPSILON:
+            result.append(value)
+    return result
+
+
+def video_signal_media(media_id: str) -> dict:
+    media = get_media(media_id)
+    if media.get("kind") != "video":
+        raise ValueError("Source beat signals can be labeled only on video files.")
+    normalized_source_signals(media.get("sourceSignals", []), media["duration"])
+    return media
+
+
+def save_video_signals(media_id: str, signals, expected_signals=None) -> dict:
+    """Save reusable source-clock marks without touching original/proxy media."""
+    with metadata_lock(media_id):
+        media = video_signal_media(media_id)
+        result = normalized_source_signals(signals, media["duration"])
+        if expected_signals is not None:
+            expected = normalized_source_signals(expected_signals, media["duration"])
+            current = normalized_source_signals(media.get("sourceSignals", []), media["duration"])
+            # A previous HTTP save may have succeeded before the client lost
+            # its response or failed to flush its separate project snapshot.
+            # Repeating that exact desired save must be safe and idempotent.
+            if expected != current and result != current:
+                raise SourceSignalConflict("This video's labels changed in another session. Reopen the label editor before saving again.")
+        if media.get("sourceSignals") == result:
+            return public_media(media)
+        media["sourceSignals"] = result
+        save_metadata(media, replace_source_signals=True)
+        return public_media(media)
 
 
 def list_media() -> list[dict]:
     result = []
     for metadata in MEDIA.glob("*/metadata.json"):
         try:
-            result.append(json.loads(metadata.read_text("utf-8")))
+            with metadata_lock(metadata.parent.name):
+                result.append(json.loads(metadata.read_text("utf-8")))
         except (OSError, json.JSONDecodeError):
             continue
     return sorted(result, key=lambda item: item.get("created", 0))

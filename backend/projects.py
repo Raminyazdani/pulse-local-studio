@@ -224,6 +224,20 @@ def validate_project(value, expected_id: str | None = None) -> dict:
                 _number(asset[key], f"Media {key}")
         if asset.get("bpm") is not None:
             _number(asset["bpm"], "Media BPM")
+        if "sourceSignals" in asset:
+            if asset["kind"] != "video":
+                raise ValueError("Source signals are only valid for video media.")
+            labels = _array(asset["sourceSignals"], "Video source signals")
+            if len(labels) > 100000:
+                raise ValueError("A video can contain at most 100,000 source signals.")
+            previous = None
+            for value in labels:
+                label = _number(value, "Video source signal")
+                if label >= duration:
+                    raise ValueError("Video source signals must lie before the source end.")
+                if previous is not None and label - previous <= 1e-7:
+                    raise ValueError("Video source signals must be unique and ordered.")
+                previous = label
         if "beats" in asset:
             _times(asset["beats"], "Detected beats", duration)
         if "beatGroups" in asset:
