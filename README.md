@@ -25,13 +25,18 @@ Keep `_internal`, `bin`, `dist` and `data` together. Running the EXE inside the 
 - Every-beat, every-Nth-beat, offset and repeating-mask selections such as `1001`.
 - Adjustable preview/timeline size, panel widths and workspace arrangement.
 - A focused video beat labeler opened from the library, with image zoom/pan, frame controls and reusable source signals.
+- The same large labeler for a selected timeline clip or merged composition, with cross-cut seeking and clip-local signals.
 - Ordered video signals mapped to music beats with an independent speed per interval.
 - Layered previews and final rendering from original media.
 - H.264/AAC MP4 and 10-bit ProRes 422 HQ/PCM MOV exports.
 - Projects saved inside the app folder, a project picker, JSON backups and Undo/Redo.
 - User-requested GitHub release checks and in-app installation of newer portable versions.
 
-## Focused video labeling in 1.5.2
+## Timeline and merged-clip labeling in 1.6.0
+
+Select an unlocked video clip and choose **Label beats** in the timeline toolbar, **Label in large window** in its Clip inspector, or **Label video in large window** in Sync. Inspect the combined visible sequence with its trims, cuts and current playback speeds, then save signals on that clip. Image zoom/pan, slow playback, frame controls and marker editing work across source boundaries. Library annotations and other clip occurrences stay independent. An unchanged save retains the existing speed map; changed signals retain the current frame timing and can be paired with music by running Sync again. See the [timeline labeler guide](docs/timeline-labeler-1.6.md).
+
+## Focused source labeling in 1.5.2
 
 Use **Label beats** on a library video to open a large labeling window. Zoom/pan the image independently of the source ruler, seek or step through frames, and add **M** signals, drag/edit their times, delete, Undo and save. **Compatible preview** plays the proxy; **Original resolution** allows closer inspection when the browser supports the source codec. Frame stepping uses the reported average frame rate, so variable-frame-rate footage and decoder/proxy timing have precision limits.
 

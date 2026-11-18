@@ -64,7 +64,8 @@ import { SourceRange } from "./components/SourceRange";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { BeatWorkbench } from "./components/BeatWorkbench";
 import { VideoSignalEditor } from "./components/VideoSignalEditor";
-import { applyVideoSourceSignals, createVideoClipSignals } from "./lib/videoSignals";
+import { applyVideoSourceSignals, createVideoClipSignals, quantizeVideoSignal } from "./lib/videoSignals";
+import { replaceTimelineSignals, timelineSignalDraft } from "./lib/timelineSignals";
 import { useWorkspaceResize, WorkspaceResizeHandle, WorkspacePanelHandles, PanelDragHandle, PreviewSizeControl } from "./components/WorkspaceResize";
 
 const STORAGE = PROJECT_STORAGE_KEY;
@@ -120,6 +121,17 @@ type Job = {
   error?: string;
   url?: string;
 };
+type SignalEditorTarget = {
+  kind: "source";
+  media: Media;
+  initialSignals: number[];
+} | {
+  kind: "timeline";
+  media: Media;
+  initialSignals: number[];
+  composition: { clip: Clip; media: Media[] };
+  initialTime: number;
+};
 
 export default function App() {
   const workspaceResize = useWorkspaceResize();
@@ -151,8 +163,9 @@ export default function App() {
   const [help, setHelp] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
-  const [signalEditor, setSignalEditor] = useState<{ media: Media; initialSignals: number[] } | null>(null);
+  const [signalEditor, setSignalEditor] = useState<SignalEditorTarget | null>(null);
   const signalSaveBaseline = useRef<number[] | null>(null);
+  const timelineSignalBaseline = useRef<{ projectId: string; clip: Clip } | null>(null);
   const [openingSignalEditor, setOpeningSignalEditor] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [exportSettings, setExportSettings] = useState<ExportSettings>({
@@ -470,12 +483,12 @@ export default function App() {
       if (currentProject.current.id !== openingProject) return;
       setPlaying(false);
       signalSaveBaseline.current = latest.signals;
-      setSignalEditor({ media: latest.media, initialSignals: latest.signals });
+      setSignalEditor({ kind: "source", media: latest.media, initialSignals: latest.signals });
     } catch (error) { notify(`Cannot open video labels: ${(error as Error).message}`, true); }
     finally { setOpeningSignalEditor(null); }
   }
   async function saveVideoSignals(signals: number[], applyToExisting: boolean) {
-    if (!signalEditor) return;
+    if (!signalEditor || signalEditor.kind !== "source") return;
     const result = await api<{ media: Media }>(`/api/media/${encodeURIComponent(signalEditor.media.id)}/signals`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ signals, expectedSignals: signalSaveBaseline.current ?? signalEditor.initialSignals }),
@@ -507,6 +520,49 @@ export default function App() {
     catch (error) { throw new Error(`Library labels were saved, but the project could not be saved. Retry Save labels. ${(error as Error).message}`); }
     setSignalEditor(null);
     notify(`${savedSignals.length} video signals saved${changed ? ` · ${changed} timeline clips updated` : ""}${locked ? ` · ${locked} locked clips left unchanged` : ""}.`);
+  }
+  function openTimelineSignals(clipId: string) {
+    if (busy || signalEditor || openingSignalEditor || !persistence.ready || persistence.switching) return;
+    const latest = currentProject.current;
+    const target = latest.clips.find(c => c.id === clipId);
+    const track = latest.tracks.find(t => t.id === target?.trackId);
+    if (!target || track?.kind !== "video") return;
+    if (track.locked) { notify("Unlock this track to label its clip.", true); return; }
+    if (!target.segments.length || target.segments.some(s => !latest.media.some(m => m.id === s.mediaId && m.kind !== "audio"))) {
+      notify("This clip needs its video or image sources before it can be labeled.", true); return;
+    }
+    try {
+      const draft = timelineSignalDraft(target);
+      const length = clipDuration(draft);
+      if (!(length > 0)) throw new Error("The selected clip has no playable duration.");
+      const [w, h] = (latest.aspect ?? "16:9").split(":").map(Number);
+      const presentation: Media = { id: target.id, name: target.name, kind: "video", duration: length,
+        width: w, height: h, fps: exportSettings.fps, hasAudio: draft.segments.some(s => latest.media.find(m => m.id === s.mediaId)?.hasAudio), url: "" };
+      setPlaying(false); setEditPreview(null); setProjectMenu(false);
+      setBeatSelection({ clipId: "", times: [] }); setSelected([target.id]); setSelectedTrack(target.trackId); setSyncVideo(target.id);
+      timelineSignalBaseline.current = { projectId: latest.id, clip: target };
+      setSignalEditor({ kind: "timeline", media: presentation, initialSignals: draft.signals,
+        composition: { clip: draft, media: latest.media }, initialTime: quantizeVideoSignal(time - target.start, length, exportSettings.fps) });
+    } catch (error) { notify(`Cannot open timeline labels: ${(error as Error).message}`, true); }
+  }
+  async function saveTimelineSignals(signals: number[]) {
+    if (signalEditor?.kind !== "timeline") return;
+    const baseline = timelineSignalBaseline.current;
+    const latest = currentProject.current;
+    if (!baseline || latest.id !== baseline.projectId) throw new Error("The project changed. Reopen the clip labeler before saving.");
+    const target = latest.clips.find(c => c.id === baseline.clip.id);
+    const track = latest.tracks.find(t => t.id === target?.trackId);
+    if (!target || track?.kind !== "video" || track.locked) throw new Error("The clip is missing or its track is locked. Reopen it on an unlocked video track.");
+    if (JSON.stringify(target) !== JSON.stringify(baseline.clip)) throw new Error("This clip changed while labels were open. Reopen it to review the current edit.");
+    const updated = replaceTimelineSignals(target, signals);
+    if (updated !== target) {
+      flushSync(() => commit({ ...latest, clips: latest.clips.map(c => c.id === target.id ? updated : c) }));
+      timelineSignalBaseline.current = { projectId: latest.id, clip: updated };
+    }
+    try { await persistence.flush(); }
+    catch (error) { throw new Error(`The clip labels are in the current edit, but the project could not be saved. Retry Save labels. ${(error as Error).message}`); }
+    setSignalEditor(null);
+    notify(`${updated.signals.length} signals saved on this timeline clip. Run Sync to pair them with music.`);
   }
   async function upload(files: FileList | File[] | null) {
     if (!files?.length) return;
@@ -918,7 +974,9 @@ export default function App() {
         />
       )}
       {signalEditor && <VideoSignalEditor media={signalEditor.media} initialSignals={signalEditor.initialSignals}
-        onSave={saveVideoSignals} onClose={() => setSignalEditor(null)} />}
+        composition={signalEditor.kind === "timeline" ? signalEditor.composition : undefined}
+        initialTime={signalEditor.kind === "timeline" ? signalEditor.initialTime : undefined}
+        onSave={signalEditor.kind === "timeline" ? saveTimelineSignals : saveVideoSignals} onClose={() => setSignalEditor(null)} />}
       <header className="app-header">
         <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
           <span className="brand-mark">
@@ -1523,6 +1581,11 @@ export default function App() {
                       <p className="hint">
                         Place signals on the moments you want to hit the music.
                       </p>
+                      <button type="button" className="button outline full timeline-label-action"
+                        aria-label="Label timeline clip beats" disabled={!!clipTrack.locked || !!busy || selected.length !== 1 || !persistence.ready || persistence.switching}
+                        onClick={() => openTimelineSignals(clip.id)}>
+                        <Flag size={14} />Label in large window
+                      </button>
                       <button
                         className="button outline full"
                         onClick={() => marker(clip.id, time - clip.start)}
@@ -1857,6 +1920,11 @@ export default function App() {
                     ))}
                   </select>
                 </label>
+                <button type="button" className="button outline full timeline-label-action" aria-label="Label sync video beats"
+                  disabled={!activeVideo || !!project.tracks.find(t => t.id === activeVideo.trackId)?.locked || !!busy || !persistence.ready || persistence.switching}
+                  onClick={() => activeVideo && openTimelineSignals(activeVideo.id)}>
+                  <Flag size={14} />Label video in large window
+                </button>
                 <label className="field-label spaced">
                   START AT SELECTED BEAT
                   <input
@@ -2000,6 +2068,8 @@ export default function App() {
         onDropMedia={addMedia}
         onMarker={marker}
         onMerge={merge}
+        onLabelClip={openTimelineSignals}
+        labelingDisabled={!!busy || !persistence.ready || persistence.switching || !!signalEditor || !!openingSignalEditor}
         onEditPreview={showEditPreview}
       />
       {(!persistence.ready || persistence.switching) && (

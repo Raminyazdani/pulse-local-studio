@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Check, ChevronLeft, ChevronRight, Flag, Maximize2, Minus, Pause, Play, Plus, Redo2, RotateCcw, SkipBack, SkipForward, Trash2, Undo2, Volume2, VolumeX, X } from 'lucide-react';
-import type { Media } from '../lib/types';
+import type { Clip, Media } from '../lib/types';
 import { normalizeSourceSignals, quantizeVideoSignal, videoFrameRate } from '../lib/videoSignals';
+import { normalizeTimelineSignals } from '../lib/timelineSignals';
+import { CompositionSignalPlayer } from './CompositionSignalPlayer';
+import type { CompositionSignalPlayerHandle } from './CompositionSignalPlayer';
 import './VideoSignalEditor.css';
 
 export interface VideoSignalEditorProps {
   media: Media;
   initialSignals: number[];
+  /** A flattened timeline instance: labels use this combined clip's local output clock. */
+  composition?: { clip: Clip; media: Media[] };
+  initialTime?: number;
   onSave: (signals: number[], applyToExisting: boolean) => Promise<void>;
   onClose: () => void;
 }
@@ -36,17 +42,19 @@ function PositionField({ label, value, digits, max, step, disabled, onCommit, on
     onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} />;
 }
 
-export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: VideoSignalEditorProps) {
+export function VideoSignalEditor({ media, initialSignals, composition, initialTime = 0, onSave, onClose }: VideoSignalEditorProps) {
   const fps = videoFrameRate(media), duration = media.duration;
   const lastFrame = Math.max(0, Math.ceil(duration * fps - 1e-7) - 1);
-  const initial = useRef(normalizeSourceSignals(initialSignals, duration));
+  const normalize = composition ? normalizeTimelineSignals : normalizeSourceSignals;
+  const [initialValues] = useState(() => normalize(initialSignals, duration));
+  const initial = useRef(initialValues);
   const [signals, setSignals] = useState(initial.current);
   const signalsRef = useRef(signals); signalsRef.current = signals;
   const [history, setHistory] = useState<number[][]>([]);
   const [future, setFuture] = useState<number[][]>([]);
   const [selected, setSelected] = useState<number | null>(null);
-  const [time, setTime] = useState(0);
-  const timeRef = useRef(0);
+  const [time, setTime] = useState(() => Math.max(0, Math.min(duration - 1e-7, initialTime)));
+  const timeRef = useRef(time);
   const presented = useRef<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [seeking, setSeeking] = useState(false);
@@ -68,6 +76,7 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
   const [hint, setHint] = useState('');
   const [closeHint, setCloseHint] = useState(false);
   const dialog = useRef<HTMLElement>(null), video = useRef<HTMLVideoElement>(null);
+  const compositionPlayer = useRef<CompositionSignalPlayerHandle>(null);
   const stage = useRef<HTMLDivElement>(null), timeline = useRef<HTMLDivElement>(null), track = useRef<HTMLDivElement>(null);
   const markerDrag = useRef<MarkerDrag | null>(null);
   const markerAnimation = useRef(0);
@@ -78,7 +87,17 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
   const zoomRef = useRef(zoom); zoomRef.current = zoom;
   const frame = Math.min(lastFrame, Math.max(0, Math.round(time * fps)));
   const dirty = !same(signals, initial.current);
+  const cuts = useMemo(() => {
+    if (!composition) return [];
+    let at = 0;
+    return composition.clip.segments.map((segment, index) => {
+      const start = at;
+      at += (segment.out - segment.in) / (segment.speed ?? 1);
+      return { start, end: at, index, name: composition.media.find(item => item.id === segment.mediaId)?.name ?? 'Missing source' };
+    });
+  }, [composition]);
   const source = quality === 'original' ? media.originalUrl || media.url : media.proxyUrl || media.url;
+  const originalAvailable = composition ? composition.clip.segments.every(segment => !!composition.media.find(item => item.id === segment.mediaId)?.originalUrl) : !!media.originalUrl;
   const aspect = (media.width || 16) / (media.height || 9);
   const fitWidth = Math.min(stageSize.width, stageSize.height * aspect);
   const fitHeight = fitWidth / aspect;
@@ -120,11 +139,12 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
     zoomRef.current = next; setZoom(next); setPan(boundPan(nextPan, next));
   };
   function fit() { zoomRef.current = 1; setZoom(1); setPan({ x: 0, y: 0 }); }
-  const pause = useCallback(() => { video.current?.pause(); setPlaying(false); }, []);
+  const pause = useCallback(() => { video.current?.pause(); compositionPlayer.current?.pause(); setPlaying(false); }, []);
   function acknowledge(at: number) { timeRef.current = at; setTime(at); }
   function seek(at: number, quantize = true) {
     const target = quantize ? quantizeVideoSignal(at, duration, fps) : Math.max(0, Math.min(duration - 1e-7, at));
     pause(); presented.current = null; acknowledge(target); setHint('');
+    if (composition) { setSeeking(true); compositionPlayer.current?.seek(target); }
     const node = video.current;
     if (node && node.readyState > 0) {
       // Seek just inside a frame. Container PTS rounding can otherwise make
@@ -145,6 +165,11 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
     });
   }
   async function togglePlay() {
+    if (composition) {
+      if (!ready || saving) return;
+      if (playing) pause(); else compositionPlayer.current?.play();
+      return;
+    }
     const node = video.current;
     if (!node || !ready || saving) return;
     if (!node.paused) { pause(); return; }
@@ -155,7 +180,7 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
     } catch (e) { if ((e as DOMException).name !== 'AbortError') setVideoError('Playback was blocked. Try Play again, or use the compatible preview.'); }
   }
   function record(next: number[]) {
-    const normalized = normalizeSourceSignals(next, duration);
+    const normalized = normalize(next, duration);
     if (same(signalsRef.current, normalized)) return;
     const previous = signalsRef.current;
     setHistory(h => [...h.slice(-99), previous]); setFuture([]);
@@ -168,7 +193,7 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
   function addSignal(at?: number) {
     const node = video.current;
     if (saving || !ready || (at === undefined && (seeking || node?.seeking))) { setHint('Wait for the requested frame to finish decoding.'); return; }
-    const shown = at ?? presented.current ?? (node?.paused ? timeRef.current : node?.currentTime) ?? timeRef.current;
+    const shown = at ?? (composition && !playing ? timeRef.current : presented.current) ?? (node?.paused ? timeRef.current : node?.currentTime) ?? timeRef.current;
     const target = at === undefined ? Math.max(0, Math.min(duration - 1e-7, shown)) : quantizeVideoSignal(at, duration, fps);
     const existing = signalsRef.current.find(s => Math.abs(s - target) < .25 / fps);
     if (existing !== undefined) { setSelected(existing); setHint('This frame already has a signal.'); return; }
@@ -181,7 +206,7 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
   }
   function updateSignal(old: number, value: number) {
     if (!Number.isFinite(value) || saving) return;
-    const next = quantizeVideoSignal(value, duration, fps);
+    const next = composition && Math.abs(value - duration) < 1e-7 ? duration : quantizeVideoSignal(value, duration, fps);
     record(signalsRef.current.map(s => Math.abs(s - old) < 1e-8 ? next : s)); selectSignal(next);
   }
   function undo() {
@@ -263,6 +288,7 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
   }, [fps]);
 
   useEffect(() => {
+    if (composition) return;
     const node = video.current;
     if (!node?.requestVideoFrameCallback) return;
     let stopped = false, callback = 0;
@@ -274,10 +300,11 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
     };
     callback = node.requestVideoFrameCallback(observe);
     return () => { stopped = true; node.cancelVideoFrameCallback(callback); };
-  }, [source]);
+  }, [source, composition]);
   useEffect(() => {
+    if (composition) return;
     pause(); setReady(false); setSeeking(false); setVideoError(''); presented.current = null;
-  }, [source, pause]);
+  }, [source, pause, composition]);
   useEffect(() => {
     const stageNode = stage.current, timelineNode = timeline.current;
     if (!stageNode || !timelineNode) return;
@@ -327,7 +354,7 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
     const old = markerDrag.current; if (!old || old.pointer !== pointer) return;
     const delta = (clientX - old.x + (timeline.current?.scrollLeft || 0) - old.scroll) / pixelsPerSecond;
     const value = quantizeVideoSignal(old.time + delta, duration, fps);
-    const next = normalizeSourceSignals(old.signals.map(s => Math.abs(s - old.time) < 1e-8 ? value : s), duration);
+    const next = normalize(old.signals.map(s => Math.abs(s - old.time) < 1e-8 ? value : s), duration);
     signalsRef.current = next; setSignals(next); setSelected(value); seek(value, false);
   };
   function moveMarker(event: ReactPointerEvent) {
@@ -339,12 +366,12 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
   return <div className="video-signal-overlay">
     <section ref={dialog} className="video-signal-editor" role="dialog" aria-modal="true" aria-label="Video beat labels" tabIndex={-1}>
       <header className="signal-editor-header"><div><span className="signal-editor-eyebrow"><Flag size={13} /> VIDEO BEAT LABELER</span><h2>{media.name}</h2></div>
-        <span className={`signal-editor-save-status ${dirty ? 'dirty' : ''}`}>{dirty ? 'Unsaved labels' : 'Source labels'} · {signals.length} signals</span>
+        <span className={`signal-editor-save-status ${dirty ? 'dirty' : ''}`}>{dirty ? 'Unsaved labels' : composition ? 'Timeline clip labels' : 'Source labels'} · {signals.length} signals</span>
         <button type="button" aria-label="Close video labeler" title="Close video labeler" disabled={saving} onClick={requestClose}><X size={20} /></button></header>
       <div className="signal-editor-tools"><div className="signal-editor-zoom"><span>IMAGE ZOOM</span><button type="button" aria-label="Zoom video out" onClick={() => zoomAction.current(zoom / 1.25)} disabled={zoom <= 1}><Minus size={14} /></button>
         <input type="range" aria-label="Video zoom" min="100" max="800" step="10" value={Math.round(zoom * 100)} onChange={e => zoomAction.current(Number(e.target.value) / 100)} /><output>{Math.round(zoom * 100)}%</output>
         <button type="button" aria-label="Zoom video in" onClick={() => zoomAction.current(zoom * 1.25)} disabled={zoom >= 8}><Plus size={14} /></button><button type="button" onClick={fit} title="Fit image and reset pan"><RotateCcw size={13} />Fit</button></div>
-        <label className="signal-editor-quality">QUALITY<select aria-label="Video labeler quality" value={quality} onChange={e => setQuality(e.target.value as typeof quality)}><option value="proxy">Compatible preview</option><option value="original" disabled={!media.originalUrl}>Original resolution</option></select></label>
+        <label className="signal-editor-quality">QUALITY<select aria-label="Video labeler quality" value={quality} onChange={e => setQuality(e.target.value as typeof quality)}><option value="proxy">Compatible preview</option><option value="original" disabled={!originalAvailable}>Original resolution</option></select></label>
         <button type="button" aria-label={muted ? 'Unmute labeling video' : 'Mute labeling video'} onClick={() => setMuted(v => !v)}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}</button>
         <button type="button" aria-label="Fullscreen video labeler" onClick={() => { if (document.fullscreenElement) void document.exitFullscreen(); else void dialog.current?.requestFullscreen().catch(() => setHint('Fullscreen is unavailable in this browser. The large labeler remains usable.')); }}><Maximize2 size={15} /></button>
       </div>
@@ -352,14 +379,17 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
         <div ref={stage} className={`signal-editor-stage ${zoom > 1 ? 'zoomed' : ''}`} data-zoom={zoom.toFixed(3)} data-pan-x={pan.x.toFixed(2)} data-pan-y={pan.y.toFixed(2)}
           onPointerDown={beginPan} onPointerMove={movePan} onPointerUp={() => { panDrag.current = null; }} onPointerCancel={() => { if (panDrag.current) setPan(panDrag.current.pan); panDrag.current = null; }}
           onDoubleClick={e => zoom > 1 ? fit() : zoomAction.current(2, e.clientX, e.clientY)}>
-          <video ref={video} className="signal-editor-video" src={source} playsInline preload="auto" muted={muted} draggable={false}
+          {composition ? <CompositionSignalPlayer ref={compositionPlayer} clip={composition.clip} media={composition.media} initialTime={initialTime} rate={rate} quality={quality} muted={muted}
+            style={{ width: fitWidth * zoom, height: fitHeight * zoom, transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px)` }}
+            onPosition={(at, shown) => { presented.current = shown; acknowledge(at); }} onReady={setReady} onSeeking={setSeeking} onPlaying={setPlaying} onError={setVideoError} />
+          : <video ref={video} className="signal-editor-video" src={source} playsInline preload="auto" muted={muted} draggable={false}
             style={{ width: fitWidth * zoom, height: fitHeight * zoom, transform: `translate(-50%, -50%) translate(${pan.x}px, ${pan.y}px)` }}
             onLoadedMetadata={() => { const node = video.current; if (!node) return; node.playbackRate = rate; if (timeRef.current > 0) node.currentTime = Math.min(timeRef.current + .00001, duration - 1e-7); }}
             onLoadedData={() => { setReady(true); setSeeking(false); }} onCanPlay={() => setReady(true)}
             onSeeking={() => setSeeking(true)} onSeeked={() => { setSeeking(false); if (video.current) acknowledge(presented.current ?? timeRef.current); }}
             onTimeUpdate={() => { if (video.current && !video.current.seeking) acknowledge(presented.current ?? (video.current.paused ? timeRef.current : video.current.currentTime)); }}
             onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
-            onError={() => { setReady(false); setVideoError(quality === 'original' ? 'The browser cannot decode this original. Switch to the compatible preview; the original file stays unchanged.' : 'The video preview could not load. Re-import this video if its local source is missing.'); }} />
+            onError={() => { setReady(false); setVideoError(quality === 'original' ? 'The browser cannot decode this original. Switch to the compatible preview; the original file stays unchanged.' : 'The video preview could not load. Re-import this video if its local source is missing.'); }} />}
           {!ready && !videoError && <div className="signal-editor-loading">Loading video frames…</div>}
           <div className="signal-editor-stage-info"><span>{seeking ? 'SEEKING FRAME' : `FRAME ${frame}`}</span><span>{zoom > 1 ? 'Drag to pan · wheel to zoom' : 'Wheel to zoom · double-click for 200%'}</span></div>
           {videoError && <div className="signal-editor-video-error"><p>{videoError}</p>{quality === 'original' && <button type="button" className="button subtle" onClick={() => setQuality('proxy')}>Use compatible preview</button>}</div>}
@@ -377,12 +407,12 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
           <button type="button" className="button primary signal-editor-add" aria-label="Add signal" title="Add signal at the displayed frame (M)" disabled={!ready || seeking || saving} onClick={() => addSignal()}><Flag size={14} />Add signal<kbd>M</kbd></button>
         </div>
       </div><aside className="signal-editor-sidebar"><div className="signal-editor-list-heading"><strong>BEAT SIGNALS</strong><span>{signals.length}</span></div>
-        <p>Mark the visual moments you want to align with music beats.</p><div className="signal-editor-history"><button type="button" aria-label="Undo video signal edit" disabled={!history.length || saving} onClick={undo}><Undo2 size={14} />Undo</button><button type="button" aria-label="Redo video signal edit" disabled={!future.length || saving} onClick={redo}><Redo2 size={14} />Redo</button></div>
+        <p>{composition ? 'Mark this combined clip across its cuts. Times are local to the clip, including its current speeds.' : 'Mark the visual moments you want to align with music beats.'}</p><div className="signal-editor-history"><button type="button" aria-label="Undo video signal edit" disabled={!history.length || saving} onClick={undo}><Undo2 size={14} />Undo</button><button type="button" aria-label="Redo video signal edit" disabled={!future.length || saving} onClick={redo}><Redo2 size={14} />Redo</button></div>
         <div className="signal-editor-list">{signals.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE).map((at, i) => {
           const index = safePage * PAGE_SIZE + i;
           return <div key={at} className={`signal-editor-row ${selected !== null && Math.abs(selected - at) < 1e-8 ? 'selected' : ''}`} data-signal-time={at.toFixed(9)}>
             <button type="button" className="signal-editor-select" aria-label={`Go to signal ${index + 1}`} onClick={() => selectSignal(at)}>#{index + 1}</button>
-            <input type="number" aria-label={`Signal ${index + 1} time`} defaultValue={at.toFixed(6)} step={1 / fps} min={0} max={lastFrame / fps} disabled={saving} onBlur={e => {
+            <input type="number" aria-label={`Signal ${index + 1} time`} defaultValue={at.toFixed(6)} step={1 / fps} min={0} max={composition ? duration : lastFrame / fps} disabled={saving} onBlur={e => {
               if (e.target.value.trim() && Number.isFinite(Number(e.target.value)) && Math.abs(Number(e.target.value) - Number(at.toFixed(6))) > 1e-10)
                 updateSignal(at, Number(e.target.value));
             }} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} />
@@ -391,19 +421,20 @@ export function VideoSignalEditor({ media, initialSignals, onSave, onClose }: Vi
         {totalPages > 1 && <div className="signal-editor-pages"><button type="button" disabled={!safePage} onClick={() => setPage(safePage - 1)}>Previous</button><span>{safePage + 1} / {totalPages}</span><button type="button" disabled={safePage >= totalPages - 1} onClick={() => setPage(safePage + 1)}>Next</button></div>}
         <button type="button" className="button subtle full" disabled={selected === null || saving} onClick={() => removeSignal()}><Trash2 size={13} />Delete selected signal</button>
       </aside></div>
-      <section className="signal-editor-timeline-section" aria-label="Source signal timeline"><div className="signal-editor-timeline-heading"><span>SOURCE TIMELINE · drag signals to adjust</span><label>TIMELINE ZOOM<input type="range" aria-label="Signal timeline zoom" min="100" max="3200" step="100" value={timelineZoom} onChange={e => changeTimelineZoom(Number(e.target.value))} /><output>{(timelineZoom / 100).toFixed(0)}×</output></label></div>
+      <section className="signal-editor-timeline-section" aria-label="Source signal timeline"><div className="signal-editor-timeline-heading"><span>{composition ? 'CLIP TIMELINE' : 'SOURCE TIMELINE'} · drag signals to adjust</span><label>TIMELINE ZOOM<input type="range" aria-label="Signal timeline zoom" min="100" max="3200" step="100" value={timelineZoom} onChange={e => changeTimelineZoom(Number(e.target.value))} /><output>{(timelineZoom / 100).toFixed(0)}×</output></label></div>
         <div ref={timeline} className="signal-editor-timeline-scroll" onScroll={e => setScrollLeft(e.currentTarget.scrollLeft)}><div ref={track} className="signal-editor-track" style={{ width }}
           onPointerDown={e => { if (e.button === 0 && !saving) seek((e.clientX - e.currentTarget.getBoundingClientRect().left) / pixelsPerSecond); }}
           onPointerMove={moveMarker} onPointerUp={() => finishMarker()} onPointerCancel={() => finishMarker(true)}
           onDoubleClick={e => { if (!(e.target as HTMLElement).closest('.signal-editor-marker')) addSignal((e.clientX - e.currentTarget.getBoundingClientRect().left) / pixelsPerSecond); }}>
           {ticks.map(at => <span key={at.toFixed(6)} className="signal-editor-tick" style={{ left: at * pixelsPerSecond }}>{at.toFixed(tickStep < 1 ? 1 : 0)}s</span>)}
           <svg width={width} height={80} className="signal-editor-wave" aria-hidden="true"><path d={wavePath} /></svg>
+          {cuts.filter(cut => cut.end * pixelsPerSecond >= scrollLeft && cut.start * pixelsPerSecond <= scrollLeft + timelineWidth).map(cut => <span key={cut.index} className="signal-editor-cut" data-cut-start={cut.start.toFixed(9)} style={{ left: cut.start * pixelsPerSecond, width: (cut.end - cut.start) * pixelsPerSecond }} title={`${cut.index + 1}. ${cut.name} · ${cut.start.toFixed(3)}–${cut.end.toFixed(3)}s`}><span>{cut.index + 1} · {cut.name}</span></span>)}
           {signals.map((at, index) => ({ at, index })).filter(({ at }) => at * pixelsPerSecond >= scrollLeft - 24 && at * pixelsPerSecond <= scrollLeft + timelineWidth + 24).map(({ at, index }) => <button key={at} type="button" className={`signal-editor-marker ${selected !== null && Math.abs(selected - at) < 1e-8 ? 'selected' : ''}`} style={{ left: at * pixelsPerSecond }} aria-label={`Timeline signal ${index + 1}`} aria-pressed={selected !== null && Math.abs(selected - at) < 1e-8}
             onPointerDown={e => beginMarker(e, at)} onClick={e => { e.stopPropagation(); selectSignal(at); }} onDoubleClick={e => e.stopPropagation()}><span>{index + 1}</span></button>)}
           <div className="signal-editor-playhead" style={{ left: time * pixelsPerSecond }} aria-hidden="true" />
         </div></div></section>
-      <footer className="signal-editor-footer"><div className="signal-editor-save-options"><label><input type="checkbox" aria-label="Apply labels to existing timeline clips" checked={applyToExisting} disabled={saving} onChange={e => setApplyToExisting(e.target.checked)} />Also apply to existing unlocked video clips</label>
-        <p>Labels are saved with the source, not burned into video. New timeline clips use them automatically.{applyToExisting && ' Existing clips keep their frame timing; run Sync again for the new signals.'}</p></div>
+      <footer className="signal-editor-footer"><div className="signal-editor-save-options">{composition ? <strong className="signal-editor-clip-scope">TIMELINE CLIP · {composition.clip.segments.length} parts</strong> : <label><input type="checkbox" aria-label="Apply labels to existing timeline clips" checked={applyToExisting} disabled={saving} onChange={e => setApplyToExisting(e.target.checked)} />Also apply to existing unlocked video clips</label>}
+        <p>{composition ? 'Save updates this clip only. Its current frame timing stays the same; run Sync again to align the revised signals. Library labels and other clips stay unchanged.' : <>Labels are saved with the source, not burned into video. New timeline clips use them automatically.{applyToExisting && ' Existing clips keep their frame timing; run Sync again for the new signals.'}</>}</p></div>
         <div className="signal-editor-footer-actions"><button type="button" className="button subtle" disabled={saving} onClick={() => { pause(); onClose(); }}>Cancel</button><button type="button" className="button primary" disabled={saving} onClick={() => void save()}><Check size={15} />{saving ? 'Saving labels…' : 'Save labels'}</button></div></footer>
       {(hint || closeHint) && <div className="signal-editor-notice" role="status">{closeHint ? 'There are unsaved labels. Save labels to keep them, or Cancel to discard them.' : hint}</div>}
       {error && <div className="signal-editor-notice error" role="alert">{error}</div>}

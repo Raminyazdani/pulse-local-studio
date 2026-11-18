@@ -345,12 +345,14 @@ def run(args) -> dict:
             report["checks"].append("browser reversible trim, stable waveform, source slip, frame preview and retained retime recovery")
             editing_env["PULSE_BEAT_TEST"] = "1"
             editing_env["PULSE_LABEL_TEST"] = "1"
+            editing_env["PULSE_TIMELINE_LABEL_TEST"] = "1"
             result = subprocess.run([node, str(ROOT / "node_modules" / "@playwright" / "test" / "cli.js"),
-                                     "test", "tests/beat-workbench.spec.ts", "tests/workspace.spec.ts", "tests/video-labeler.spec.ts"], cwd=ROOT, env=editing_env,
+                                     "test", "tests/beat-workbench.spec.ts", "tests/workspace.spec.ts", "tests/video-labeler.spec.ts", "tests/timeline-labeler.spec.ts"], cwd=ROOT, env=editing_env,
                                     timeout=600, creationflags=CREATE_FLAGS)
             assert result.returncode == 0, "Beat workbench or configurable workspace browser checks failed."
             report["checks"].append("browser audible bass groups, beat selection/deletion, exact filter-repeat and configurable panel layout")
             report["checks"].append("browser focused video labels, decoded frame stepping, zoom/pan, durable library marks and sync reuse")
+            report["checks"].append("browser merged timeline clip labels, cross-cut source timing, warp preservation, local-only saves and retry")
         report["passed"] = True
         return report
     finally:

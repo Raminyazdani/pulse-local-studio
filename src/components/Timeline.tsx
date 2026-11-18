@@ -15,6 +15,8 @@ interface Props {
   onChange: (project: Project) => void; onAddTrack: (kind: 'video' | 'audio') => void;
   onDropMedia: (mediaId: string, trackId: string, time: number) => void;
   onMarker: (clipId: string, localOutput: number) => void; onMerge: () => void;
+  onLabelClip?: (clipId: string) => void;
+  labelingDisabled?: boolean;
   onEditPreview?: (clips: Clip[] | null, time?: number) => void;
   selectedBeats?: { clipId: string; times: number[] };
   repeatPreview?: { clipId: string; times: number[] } | null;
@@ -258,6 +260,8 @@ export function Timeline(p: Props) {
   const activeSource = drag ? sourceReadout(drag.draft) : undefined;
   const sourceGhost = drag && ['left', 'right', 'slip'].includes(drag.type) ? editSourceClip(drag.draft, p.project.media) : undefined;
   const visibleWaveform = (clip: Clip) => ({ visibleStart: Math.max(0, scrollLeft - clip.start * p.zoom - 24), visibleEnd: scrollLeft + viewportWidth - HEADER - clip.start * p.zoom + 24 });
+  const labelClip = p.selected.length === 1 ? p.project.clips.find(clip => clip.id === p.selected[0] &&
+    p.project.tracks.some(track => track.id === clip.trackId && track.kind === 'video' && !track.locked)) : undefined;
 
   return <section className={`timeline-panel ${drag ? 'is-dragging' : ''}`} ref={panel} aria-label="Editing timeline">
     <div className="timeline-toolbar">
@@ -269,6 +273,8 @@ export function Timeline(p: Props) {
         <button aria-pressed={snap} aria-label="Snap to beats" title="Snap to beats, playhead and clip edges · hold Shift to bypass" className={snap ? 'tool-button active' : 'tool-button'} onClick={() => setSnap(!snap)}><Magnet size={15} /></button>
       </div>
       <div className="toolbar-group timeline-zoom-tools">
+        {p.onLabelClip && <button type="button" className="text-button" aria-label="Label selected video beats" title="Open the large beat labeler for the selected video, including merged clips"
+          disabled={!labelClip || p.labelingDisabled || !!drag} onClick={() => labelClip && p.onLabelClip?.(labelClip.id)}><Flag size={15} /><span>Label beats</span></button>}
         <button className="text-button" title="Join all clips in selected track, closing gaps" onClick={p.onMerge}><Layers2 size={15} /><span>Merge track</span></button><span className="divider" />
         <button className="tool-button" onClick={() => p.onZoom(Math.max(6, p.zoom / 1.35))} title="Zoom out"><Minus size={14} /></button>
         <input aria-label="Timeline zoom" className="zoom-slider" type="range" min="6" max="400" value={p.zoom} onChange={event => p.onZoom(+event.target.value)} />
